@@ -557,11 +557,24 @@ def _rename_failed(path: str) -> str | None:
 _output_move_lock = threading.Lock()
 
 
-def move_output_file(produced_file: str, target_dir: str) -> str:
+def move_output_file(produced_file: str, target_dir: str,
+                     book_ext: str | None = None) -> str:
     """Move a single conversion output to target_dir, applying any needed
-    renaming. Returns the final destination path."""
+    renaming. Returns the final destination path.
+
+    book_ext is the extension the Books settings asked for ('kepub',
+    'kepub.epub' or 'epub'). None means comic output, which keeps KCC's
+    .kepub.epub normalised down to .kepub.
+    """
     filename = os.path.basename(produced_file)
-    if filename.endswith('.kepub.epub'):
+    if book_ext:
+        # Longest suffix first: .kepub.epub also ends with .epub.
+        for suffix in ('.kepub.epub', '.kepub', '.epub'):
+            if filename.endswith(suffix):
+                filename = filename[:-len(suffix)]
+                break
+        filename += '.' + book_ext
+    elif filename.endswith('.kepub.epub'):
         filename = filename[:-len('.kepub.epub')] + '.kepub'
     os.makedirs(target_dir, exist_ok=True)
     # Books convert in parallel; the lock keeps two same-named outputs from
@@ -682,6 +695,52 @@ def _strip_leading_dash(filepath: str, job_id: str) -> str:
     return safe
 
 
+def _build_kepubify_cmd(config: ConfigDict, filepath: str, temp_out: str) -> list[str]:
+    """Build the kepubify argument list from the Books settings.
+
+    kepubify's own output extension is .kepub.epub, and --calibre switches it
+    to .kepub. A plain .epub is not something kepubify can emit, so it is asked
+    for .kepub here and renamed on the way out by move_output_file.
+    """
+    cmd = ['kepubify', '--inplace', '--output', temp_out]
+
+    # settings.json bypasses _validate_post, so re-clamp here too (mirrors
+    # kcc_format's fallback in _build_kcc_cmd).
+    book_ext = config.get('book_extension', 'kepub')
+    if book_ext not in ('kepub', 'kepub.epub', 'epub'):
+        book_ext = 'kepub'
+    if book_ext in ('kepub', 'epub'):
+        cmd.append('--calibre')
+
+    if config.get('book_smarten_punctuation'): cmd.append('--smarten-punctuation')
+    if config.get('book_fullscreen_fixes'):    cmd.append('--fullscreen-reading-fixes')
+
+    hyphenate = config.get('book_hyphenate', 'auto')
+    if hyphenate == 'on':  cmd.append('--hyphenate')
+    if hyphenate == 'off': cmd.append('--no-hyphenate')
+
+    titlepage = config.get('book_dummy_titlepage', 'auto')
+    if titlepage == 'on':  cmd.append('--add-dummy-titlepage')
+    if titlepage == 'off': cmd.append('--no-add-dummy-titlepage')
+
+    # = form, so values starting with a dash don't read as options. `or ''`
+    # instead of a get(..., '') default: a hand-edited settings.json can carry
+    # an explicit JSON null, and str(None) is the literal string 'None'.
+    css = (config.get('book_css') or '').strip()
+    if css:
+        cmd.append('--css=' + css)
+    for line in (config.get('book_replace') or '').splitlines():
+        line = line.strip()
+        if '|' in line:
+            cmd.append('--replace=' + line)
+    charset = (config.get('book_charset') or '').strip()
+    if charset:
+        cmd.append('--charset=' + charset)
+
+    cmd.append(filepath)
+    return cmd
+
+
 def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
     """Convert a single file, tracking state in the job registry."""
     short    = os.path.basename(filepath)[:40]
@@ -721,7 +780,8 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
 
         if c_type == 'book':
             log(f">>> STARTING: kepubify on {short}")
-            cmd = ['kepubify', '--calibre', '--inplace', '--output', temp_out, filepath]
+            cmd = _build_kepubify_cmd(config, filepath, temp_out)
+            log(f">>> CMD: {' '.join(cmd)}")
             _run_conversion(cmd, short)
 
         else:
@@ -739,7 +799,14 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
             mode = config.get('originals', 'delete') if c_type == 'comic' else 'delete'
             if mode == 'keep':
                 _discard_previous_outputs(filepath)
-            dests = [move_output_file(f, target_dir) for f in produced]
+            book_ext = None
+            if c_type == 'book':
+                # settings.json bypasses _validate_post, so re-clamp here too
+                # (mirrors kcc_format's fallback in _build_kcc_cmd).
+                book_ext = config.get('book_extension', 'kepub')
+                if book_ext not in ('kepub', 'kepub.epub', 'epub'):
+                    book_ext = 'kepub'
+            dests = [move_output_file(f, target_dir, book_ext) for f in produced]
             if os.path.exists(filepath):
                 if mode == 'keep':
                     _mark_converted(filepath, dests)
