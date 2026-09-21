@@ -3,6 +3,7 @@
 ### Added
 
 - **Books settings card**: everything dropped into `Books_in` now has its own settings card in the WebUI, exposing kepubify's conversion options: output extension, smarten punctuation, hyphenation, dummy titlepage, fullscreen reading fixes, custom CSS, find and replace, and charset override. Previously every one of these was hardcoded.
+- **Kindle formats in `Books_in`**: with the new **Convert Kindle Formats** setting on, DRM-free `.kfx`, `.azw3` and `.mobi` books are converted to kepub as well. [boko](https://github.com/zacharydenton/boko) turns them into an EPUB first and kepubify takes it from there, so every Books setting applies to them too. Off by default, amd64 and arm64 images only, and `.kfx-zip` is not accepted. A stuck pre-conversion is killed after `BINDERY_BOKO_TIMEOUT` seconds (default 600).
 - **Output extension for books**: choose `.kepub` (the default, and what Calibre and Calibre-Web-Automated expect), `.kepub.epub` (what a Kobo recognises when you copy books to it over USB), or plain `.epub`.
 
 ### Fixed

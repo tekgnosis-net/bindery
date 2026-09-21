@@ -8,6 +8,7 @@ services:
       - PUID=1000
       - PGID=1000
       # - SKIP_CHOWN=true   # uncomment for NFS/SMB volumes the container can't chown
+      - BINDERY_BOKO_TIMEOUT=${BINDERY_BOKO_TIMEOUT:-600}   # seconds a Kindle-format pre-conversion may run (30-7200)
     volumes:
       - ./config:/app/config
       - ./books_in:/Books_in

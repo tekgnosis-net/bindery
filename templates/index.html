@@ -385,7 +385,7 @@
             </select>
         </span>
         <input type="file" id="upload-input" multiple style="display:none"
-               accept=".epub,.cbz,.cbr,.zip,.rar,.pdf">
+               accept=".epub,.kfx,.azw3,.mobi,.cbz,.cbr,.zip,.rar,.pdf">
     </div>
     <ul class="upl-list" id="upl-list"></ul>
 
@@ -788,6 +788,13 @@
                         <span>
                             <div class="check-label">Fullscreen Reading Fixes</div>
                             <div class="check-hint">Works around Kobo layout bugs on books built around full-page images</div>
+                        </span>
+                    </label>
+                    <label class="check">
+                        <input type="checkbox" name="book_boko_enabled" {% if config.book_boko_enabled %}checked{% endif %}>
+                        <span>
+                            <div class="check-label">Convert Kindle Formats</div>
+                            <div class="check-hint">Also accept DRM-free .kfx, .azw3 and .mobi: boko turns them into an EPUB first, then kepubify takes over. Best effort, and the source is deleted after a successful conversion like any other book.</div>
                         </span>
                     </label>
                 </div>

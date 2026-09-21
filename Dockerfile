@@ -34,6 +34,24 @@ RUN set -eux; \
     chmod +x /usr/local/bin/kepubify; \
     kepubify --version
 
+# boko turns DRM-free Kindle books into EPUBs for kepubify. Upstream ships no
+# armhf or i386 build; those images go without and the feature disables
+# itself. Extracted with Python because the slim base has no xz binary.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) target="x86_64-unknown-linux-gnu";  sum="3df50e781c7533666d4718ce23e392423674ade8acb1955c805997af51af42a6" ;; \
+      arm64) target="aarch64-unknown-linux-gnu"; sum="c25958f7eddec7a73e3f522547d4b3e38f27c6889ac6029628236899579f2a45" ;; \
+      *) echo "No boko build for $arch, skipping"; exit 0 ;; \
+    esac; \
+    curl -fsSL "https://github.com/zacharydenton/boko/releases/download/v0.5.0/boko-${target}.tar.xz" \
+      -o /tmp/boko.tar.xz; \
+    echo "${sum}  /tmp/boko.tar.xz" | sha256sum -c -; \
+    python3 -c "import tarfile; t = tarfile.open('/tmp/boko.tar.xz'); f = t.extractfile('boko-${target}/boko'); open('/usr/local/bin/boko', 'wb').write(f.read())"; \
+    rm /tmp/boko.tar.xz; \
+    chmod +x /usr/local/bin/boko; \
+    boko --version
+
 RUN ln -sf /usr/bin/7z /usr/local/bin/7za \
  && ln -sf /usr/bin/7z /usr/local/bin/7zr || true
 
