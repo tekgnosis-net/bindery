@@ -355,3 +355,25 @@ def test_api_upload_lands_in_profile_folder(client, tmp_path):
 
     resp, _books, comics_in = _upload(client, tmp_path, 'other.cbz', profile='ghost')
     assert (comics_in / 'other.cbz').exists()
+
+
+def test_api_upload_kindle_formats_follow_boko_setting(client, tmp_path):
+    # Off (the default): a Kindle file is not a book, so it is refused rather
+    # than parked in Books_in where nothing would ever pick it up.
+    with patch('processor._boko_available', return_value=True):
+        resp, books_in, _comics = _upload(client, tmp_path, 'novel.kfx')
+    assert json.loads(resp.data)['files'][0]['error'] == 'unsupported file type'
+
+    (tmp_path / 'settings.json').write_text(json.dumps({'book_boko_enabled': True}))
+    with patch('processor._boko_available', return_value=True):
+        resp, books_in, _comics = _upload(client, tmp_path, 'novel.kfx')
+        assert (books_in / 'novel.kfx').read_bytes() == b'data'
+        resp, _books, _comics = _upload(client, tmp_path, 'novel.kfx-zip')
+    assert json.loads(resp.data)['files'][0]['error'] == 'unsupported file type'
+
+
+def test_post_saves_boko_toggle(client, tmp_path):
+    saved, _ = _post(client, tmp_path, book_boko_enabled='on')
+    assert saved['book_boko_enabled'] is True
+    saved, _ = _post(client, tmp_path)
+    assert saved['book_boko_enabled'] is False

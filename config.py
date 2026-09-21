@@ -50,6 +50,9 @@ DEFAULT_CONFIG: ConfigDict = {
     'book_css':                  '',
     'book_replace':              '',
     'book_charset':              '',
+    # Off by default: books delete their source after converting, so turning
+    # this on for someone with stray .mobi files in Books_in would eat them.
+    'book_boko_enabled':         False,
     'file_wait_timeout':     60,
     'watcher_mode':          'poll',
     'apprise_urls':          '',

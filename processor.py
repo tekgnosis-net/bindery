@@ -21,6 +21,10 @@ BOOKS_IN       = '/Books_in'
 BOOKS_OUT      = '/Books_out'
 
 BOOK_EXTS  = {'.epub'}
+# Kindle formats boko can turn into an EPUB for kepubify to take from there.
+# .kfx-zip is absent on purpose: it is what DRM-removal tooling emits, and
+# Bindery only handles files that were DRM-free to begin with.
+BOKO_EXTS  = {'.kfx', '.azw3', '.mobi'}
 COMIC_EXTS = {'.cbz', '.cbr', '.zip', '.rar', '.pdf'}
 
 # Archive types 7z can extract for chapter bundling. PDFs are deliberately
@@ -592,15 +596,36 @@ class ConversionError(Exception):
         self.returncode = returncode
 
 
-def _run_conversion(cmd: list[str], short: str) -> None:
-    """Run cmd, streaming output to the log. Raises ConversionError on non-zero exit."""
+def _run_conversion(cmd: list[str], short: str, timeout: int | None = None) -> None:
+    """Run cmd, streaming output to the log. Raises ConversionError on non-zero exit.
+
+    timeout kills the process after that many seconds. A Timer rather than
+    wait(timeout=): the stdout loop below blocks until the process closes its
+    pipe, so a hung converter would never reach a timed wait.
+    """
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
     )
-    for line in process.stdout:
-        log(f"[{short}] {line.rstrip()}")
-    process.wait()
+    timed_out = threading.Event()
+
+    def _kill() -> None:
+        timed_out.set()
+        process.kill()
+
+    timer = threading.Timer(timeout, _kill) if timeout else None
+    if timer:
+        timer.daemon = True
+        timer.start()
+    try:
+        for line in process.stdout:
+            log(f"[{short}] {line.rstrip()}")
+        process.wait()
+    finally:
+        if timer:
+            timer.cancel()
+    if timed_out.is_set():
+        raise RuntimeError(f'timed out after {timeout}s')
     if process.returncode != 0:
         raise ConversionError(process.returncode)
 
@@ -695,6 +720,39 @@ def _strip_leading_dash(filepath: str, job_id: str) -> str:
     return safe
 
 
+def _boko_available() -> bool:
+    # boko publishes no armhf or i386 binary, so those images ship without it
+    # and Kindle formats simply stop being book jobs there.
+    return shutil.which('boko') is not None
+
+
+def _boko_timeout() -> int:
+    """Seconds a boko run may take, from BINDERY_BOKO_TIMEOUT (30-7200, default 600).
+
+    boko is a young 0.x converter with an open upstream report of pathological
+    input; book conversions run unserialised, so a hung one must not pin a
+    thread and its temp files forever.
+    """
+    try:
+        secs = int(os.environ.get('BINDERY_BOKO_TIMEOUT', '600'))
+    except ValueError:
+        secs = 600
+    return max(30, min(7200, secs))
+
+
+def book_exts(config: ConfigDict) -> set[str]:
+    """Extensions that count as a book job under the current settings."""
+    if config.get('book_boko_enabled') and _boko_available():
+        return BOOK_EXTS | BOKO_EXTS
+    return set(BOOK_EXTS)
+
+
+def _build_boko_cmd(filepath: str, epub_out: str) -> list[str]:
+    # Both paths are absolute, so a filename with a leading dash cannot be
+    # read as an option.
+    return ['boko', 'convert', filepath, epub_out]
+
+
 def _build_kepubify_cmd(config: ConfigDict, filepath: str, temp_out: str) -> list[str]:
     """Build the kepubify argument list from the Books settings.
 
@@ -746,6 +804,7 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
     short    = os.path.basename(filepath)[:40]
     in_base  = BOOKS_IN if c_type == 'book' else COMICS_IN
     temp_out = os.path.join('/tmp', uuid.uuid4().hex + '_out')
+    boko_tmp = os.path.join('/tmp', uuid.uuid4().hex + '_boko')
     lock_key = filepath
 
     try:
@@ -779,8 +838,24 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
         os.makedirs(temp_out, exist_ok=True)
 
         if c_type == 'book':
+            kepub_src = filepath
+            if os.path.splitext(filepath)[1].lower() in BOKO_EXTS:
+                # Nothing converts a Kindle book to kepub directly; a kepub
+                # is an EPUB with Kobo markup, so boko makes the EPUB first.
+                # Retry can land here on an image without boko.
+                if not _boko_available():
+                    raise RuntimeError('boko is not installed in this image')
+                os.makedirs(boko_tmp, exist_ok=True)
+                # kepubify names its output after its input, so the stem
+                # has to survive into the intermediate file.
+                kepub_src = os.path.join(
+                    boko_tmp, os.path.splitext(os.path.basename(filepath))[0] + '.epub')
+                log(f">>> STARTING: boko on {short}")
+                cmd = _build_boko_cmd(filepath, kepub_src)
+                log(f">>> CMD: {' '.join(cmd)}")
+                _run_conversion(cmd, short, timeout=_boko_timeout())
             log(f">>> STARTING: kepubify on {short}")
-            cmd = _build_kepubify_cmd(config, filepath, temp_out)
+            cmd = _build_kepubify_cmd(config, kepub_src, temp_out)
             log(f">>> CMD: {' '.join(cmd)}")
             _run_conversion(cmd, short)
 
@@ -845,6 +920,7 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
         _notify('failure', os.path.basename(filepath), msg)
     finally:
         shutil.rmtree(temp_out, ignore_errors=True)
+        shutil.rmtree(boko_tmp, ignore_errors=True)
         with lock_mutex:
             PROCESSING_LOCKS.discard(lock_key)
 
@@ -1039,10 +1115,11 @@ def _extract_chapter_folder(folderpath: str) -> tuple[str, str]:
 
 
 def scan_directories() -> None:
+    exts = book_exts(load_config())
     for root, dirs, files in os.walk(BOOKS_IN):
         dirs[:] = [d for d in dirs if not d.startswith('.') and not d.endswith('.failed')]
         for f in files:
-            if os.path.splitext(f)[1].lower() in BOOK_EXTS and not f.endswith('.failed'):
+            if os.path.splitext(f)[1].lower() in exts and not f.endswith('.failed'):
                 path = os.path.join(root, f)
                 with lock_mutex:
                     if path not in PROCESSING_LOCKS:
@@ -1135,10 +1212,11 @@ def inotify_watch_loop() -> None:
     class _Handler(FileSystemEventHandler):
         def __init__(self, c_type: str) -> None:
             self.c_type = c_type
-            self.exts   = BOOK_EXTS if c_type == 'book' else COMIC_EXTS
-
         def _maybe_dispatch(self, path: str) -> None:
-            if os.path.splitext(path)[1].lower() not in self.exts:
+            # Book extensions follow a live setting, so resolve them per
+            # event the way scan_directories does per scan.
+            exts = book_exts(load_config()) if self.c_type == 'book' else COMIC_EXTS
+            if os.path.splitext(path)[1].lower() not in exts:
                 return
             if any(part.startswith('.') or part.endswith('.failed')
                    for part in path.split(os.sep) if part):

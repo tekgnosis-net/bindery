@@ -13,7 +13,7 @@
 
 A self-hosted, Dockerized converter that automatically processes e-books and comics dropped into watched folders, no manual steps required.
 
-**For Kobo users:** Converts `.epub` files to Kobo's native `.kepub` format using [kepubify](https://github.com/pgaskin/kepubify), giving you better performance and reading features than sideloaded EPUBs.
+**For Kobo users:** Converts `.epub` files to Kobo's native `.kepub` format using [kepubify](https://github.com/pgaskin/kepubify), giving you better performance and reading features than sideloaded EPUBs. DRM-free Kindle books (`.kfx`, `.azw3`, `.mobi`) can optionally be converted too, via [boko](https://github.com/zacharydenton/boko).
 
 **For all devices:** Converts comic archives and PDFs (`.cbz`, `.cbr`, `.zip`, `.rar`, `.pdf`) into device-optimised files using [Kindle Comic Converter (KCC)](https://github.com/ciromattia/kcc), with full control over profile, cropping, splitting, gamma, and more.
 
@@ -77,6 +77,7 @@ services:
       - PUID=1000   # replace with your uid
       - PGID=1000   # replace with your gid
       # - SKIP_CHOWN=true   # uncomment for NFS/SMB volumes the container can't chown (e.g. unprivileged LXC)
+      - BINDERY_BOKO_TIMEOUT=${BINDERY_BOKO_TIMEOUT:-600}   # seconds a Kindle-format pre-conversion may run (30-7200)
     volumes:
       - ./config:/app/config
       - /path/to/books_in:/Books_in
@@ -100,7 +101,7 @@ The WebUI at port 5000 gives you full control over Bindery without touching conf
 
 ### Upload
 
-Drag files anywhere onto the page, or tap the strip under the header on a phone, and they land in the right watch folder automatically: `.epub` goes to `Books_in`, comics to `Comics_in` or a device profile folder of your choice. Conversion starts on the next scan, and the status table picks the job up like any other drop. No Samba, SFTP, or shell access needed.
+Drag files anywhere onto the page, or tap the strip under the header on a phone, and they land in the right watch folder automatically: `.epub` (and Kindle formats, when enabled) goes to `Books_in`, comics to `Comics_in` or a device profile folder of your choice. Conversion starts on the next scan, and the status table picks the job up like any other drop. No Samba, SFTP, or shell access needed.
 
 ### Processing Status
 
@@ -168,6 +169,20 @@ Books dropped into `Books_in` are converted by [kepubify](https://github.com/pga
 | Custom CSS | *(blank)* | Appended to every converted book. |
 | Find and Replace | *(blank)* | One `find\|replace` rule per line, applied to each HTML file in the book. Lines without a separator are ignored, because kepubify aborts the whole conversion on a malformed rule. |
 | Charset Override | *(blank)* | Blank uses utf-8. Set `auto` to detect the charset from the content. |
+| Convert Kindle Formats | Off | Also accept DRM-free `.kfx`, `.azw3` and `.mobi` in `Books_in`. See below. |
+
+### Kindle formats
+
+Nothing converts a Kindle book straight to kepub, because a kepub is an EPUB with Kobo markup added. With **Convert Kindle Formats** enabled, [boko](https://github.com/zacharydenton/boko) (pinned at v0.5.0) first turns the file into a temporary EPUB, and kepubify then converts that exactly as it would any other book, with all the settings above applied. Set Output Extension to `.epub` if a plain EPUB is what you want out of it.
+
+- **DRM-free files only.** Bindery removes no DRM, and `.kfx-zip` is deliberately not accepted.
+- **Best effort.** boko is a young project; complex layouts, fonts and footnotes may not survive perfectly. Like every book, the source is deleted after a successful conversion, so keep your originals elsewhere. A file boko cannot read is renamed `.failed` and left alone.
+- **Off by default** so that Kindle files already sitting in `Books_in` are not converted and removed by surprise after an update.
+- **amd64 and arm64 images only.** boko publishes no 32-bit builds; on other architectures the setting has no effect.
+
+| Environment variable | Default | Range | Purpose |
+|---|---|---|---|
+| `BINDERY_BOKO_TIMEOUT` | `600` | 30 to 7200 | Seconds one boko run may take before it is killed and the book marked failed. Read on every conversion, so a container recreate is all a change needs. |
 
 ---
 

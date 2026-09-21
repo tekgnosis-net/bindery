@@ -1,5 +1,7 @@
 import json
 import os
+import sys
+import time
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -1116,3 +1118,171 @@ def test_scan_ignores_ledger_when_not_keep_mode(tmp_path):
         processor.scan_directories()
 
     assert str(src) in dispatched, 'archive mode must ignore the ledger'
+
+
+# ── boko pre-conversion (Kindle formats -> EPUB -> kepubify) ─────────────────
+
+def test_build_boko_cmd():
+    cmd = processor._build_boko_cmd('/Books_in/a/Book.kfx', '/tmp/x_boko/Book.epub')
+    assert cmd == ['boko', 'convert', '/Books_in/a/Book.kfx', '/tmp/x_boko/Book.epub']
+
+
+@pytest.mark.parametrize('enabled,installed,expected', [
+    (True,  True,  {'.epub', '.kfx', '.azw3', '.mobi'}),
+    (True,  False, {'.epub'}),   # armhf/i386 images ship without boko
+    (False, True,  {'.epub'}),
+])
+def test_book_exts_follows_setting_and_binary(enabled, installed, expected):
+    config = dict(DEFAULT_CONFIG)
+    config['book_boko_enabled'] = enabled
+    with patch('processor._boko_available', return_value=installed):
+        assert processor.book_exts(config) == expected
+
+
+def test_book_exts_never_includes_kfx_zip():
+    config = dict(DEFAULT_CONFIG)
+    config['book_boko_enabled'] = True
+    with patch('processor._boko_available', return_value=True):
+        assert '.kfx-zip' not in processor.book_exts(config)
+        assert '.zip' not in processor.book_exts(config)
+
+
+@pytest.mark.parametrize('raw,expected', [
+    (None,    600),
+    ('120',   120),
+    ('5',     30),     # clamped up
+    ('99999', 7200),   # clamped down
+    ('soon',  600),    # unparseable -> default
+])
+def test_boko_timeout_env_knob(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv('BINDERY_BOKO_TIMEOUT', raising=False)
+    else:
+        monkeypatch.setenv('BINDERY_BOKO_TIMEOUT', raw)
+    assert processor._boko_timeout() == expected
+
+
+def _boko_env(tmp_path, config, fake_run, available=True):
+    from contextlib import ExitStack
+    stack = ExitStack()
+    for ctx in (
+        patch.object(processor, 'BOOKS_IN', str(tmp_path / 'books_in')),
+        patch.object(processor, 'BOOKS_OUT', str(tmp_path / 'books_out')),
+        patch.object(processor, 'JOBS_FILE', str(tmp_path / 'jobs.json')),
+        patch.object(processor, 'STATS_FILE', str(tmp_path / 'stats.json')),
+        patch('processor.load_config', return_value=config),
+        patch('processor.wait_for_file_ready', return_value=True),
+        patch('processor._boko_available', return_value=available),
+        patch('processor._notify'),
+        patch('processor._run_conversion', side_effect=fake_run),
+    ):
+        stack.enter_context(ctx)
+    return stack
+
+
+def test_process_file_kindle_book_chains_boko_into_kepubify(tmp_path):
+    books_in = tmp_path / 'books_in'
+    books_in.mkdir()
+    src = books_in / 'Book.kfx'
+    src.write_bytes(b'x' * 100)
+    config = dict(DEFAULT_CONFIG)
+    config['book_boko_enabled'] = True
+
+    calls = []
+
+    def fake_run(cmd, short, timeout=None):
+        calls.append((list(cmd), timeout))
+        if cmd[0] == 'boko':
+            with open(cmd[3], 'wb') as f:
+                f.write(b'e' * 80)
+        else:
+            out = cmd[cmd.index('--output') + 1]
+            os.makedirs(out, exist_ok=True)
+            with open(os.path.join(out, 'Book.kepub'), 'wb') as f:
+                f.write(b'y' * 50)
+
+    with _boko_env(tmp_path, config, fake_run):
+        processor.process_file(str(src), 'book')
+
+    assert [c[0][0] for c in calls] == ['boko', 'kepubify']
+    boko_cmd, boko_timeout = calls[0]
+    assert boko_cmd[2] == str(src)
+    assert os.path.basename(boko_cmd[3]) == 'Book.epub'
+    assert boko_timeout == processor._boko_timeout()
+    # kepubify reads boko's EPUB, never the Kindle file
+    assert calls[1][0][-1] == boko_cmd[3]
+    assert os.listdir(tmp_path / 'books_out') == ['Book.kepub']
+    assert not src.exists()
+    # the intermediate EPUB is cleaned up
+    assert not os.path.exists(os.path.dirname(boko_cmd[3]))
+
+
+def test_process_file_kindle_book_boko_failure_renames_failed(tmp_path):
+    books_in = tmp_path / 'books_in'
+    books_in.mkdir()
+    src = books_in / 'Book.azw3'
+    src.write_bytes(b'x' * 100)
+    config = dict(DEFAULT_CONFIG)
+    config['book_boko_enabled'] = True
+
+    calls = []
+
+    def fake_run(cmd, short, timeout=None):
+        calls.append(cmd[0])
+        raise processor.ConversionError(1)
+
+    with _boko_env(tmp_path, config, fake_run):
+        processor.process_file(str(src), 'book')
+
+    assert calls == ['boko']   # kepubify never runs on a failed pre-conversion
+    assert os.listdir(books_in) == ['Book.azw3.failed']
+
+
+def test_process_file_kindle_book_without_boko_fails_cleanly(tmp_path):
+    """A retried .failed Kindle file on an image without boko must fail with a
+    readable reason instead of a bare FileNotFoundError."""
+    books_in = tmp_path / 'books_in'
+    books_in.mkdir()
+    src = books_in / 'Book.mobi'
+    src.write_bytes(b'x' * 100)
+    config = dict(DEFAULT_CONFIG)
+    config['book_boko_enabled'] = True
+
+    def fake_run(cmd, short, timeout=None):
+        raise AssertionError('no converter should run')
+
+    with _boko_env(tmp_path, config, fake_run, available=False):
+        processor.process_file(str(src), 'book')
+
+    assert os.listdir(books_in) == ['Book.mobi.failed']
+    job = next(iter(processor.JOB_REGISTRY.values()))
+    assert 'boko' in job['error']
+
+
+def test_scan_directories_dispatches_kindle_books_only_when_enabled(tmp_path):
+    books_in = tmp_path / 'books_in'
+    books_in.mkdir()
+    (books_in / 'a.kfx').write_bytes(b'x')
+    (books_in / 'b.epub').write_bytes(b'x')
+    (books_in / 'c.kfx-zip').write_bytes(b'x')
+
+    for enabled, expected in ((False, {'b.epub'}), (True, {'a.kfx', 'b.epub'})):
+        config = dict(DEFAULT_CONFIG)
+        config['book_boko_enabled'] = enabled
+        seen = []
+        processor.PROCESSING_LOCKS.clear()
+        with patch.object(processor, 'BOOKS_IN', str(books_in)), \
+             patch.object(processor, 'COMICS_IN', str(tmp_path / 'none')), \
+             patch('processor.load_config', return_value=config), \
+             patch('processor._boko_available', return_value=True), \
+             patch('processor.process_file', side_effect=lambda p, t: seen.append(os.path.basename(p))):
+            processor.scan_directories()
+            time.sleep(0.2)
+        processor.PROCESSING_LOCKS.clear()
+        assert set(seen) == expected
+
+
+def test_run_conversion_kills_on_timeout():
+    with pytest.raises(RuntimeError, match='timed out'):
+        processor._run_conversion([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                  'slow', timeout=1)

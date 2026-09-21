@@ -14,7 +14,7 @@ from processor import (
     LOG_BUFFER, log_lock, log, watch_loop, inotify_watch_loop,
     _load_log_history, _load_job_registry, _load_converted_ledger, _load_stats, _collision_free,
     JOB_REGISTRY, job_registry_lock, retry_file, STATS, stats_lock,
-    BOOK_EXTS, COMIC_EXTS,
+    COMIC_EXTS, book_exts,
     BOOKS_IN, BOOKS_OUT, COMICS_IN, COMICS_OUT,
 )
 from raw_processor import raw_watch_loop, raw_inotify_watch_loop
@@ -128,10 +128,10 @@ def create_app(start_threads: bool = True) -> Flask:
         for f in uploads:
             name = os.path.basename(f.filename or '').lstrip('.')
             ext  = os.path.splitext(name)[1].lower()
-            if not name or ext not in BOOK_EXTS | COMIC_EXTS:
+            if not name or ext not in book_exts(config) | COMIC_EXTS:
                 results.append({'name': f.filename or '?', 'error': 'unsupported file type'})
                 continue
-            if ext in BOOK_EXTS:
+            if ext in book_exts(config):
                 base = BOOKS_IN
             else:
                 base = os.path.join(COMICS_IN, profile) if profile in profiles else COMICS_IN
@@ -311,6 +311,7 @@ def create_app(start_threads: bool = True) -> Flask:
                         'kcc_metadatatitle', 'kcc_comicinfo', 'kcc_nokepub',
                         'notify_on_success', 'notify_on_failure',
                         'book_smarten_punctuation', 'book_fullscreen_fixes',
+                        'book_boko_enabled',
                         'bundle_chapter_folders'):
                 config[key] = key in request.form
             config['file_wait_timeout'] = request.form.get(
