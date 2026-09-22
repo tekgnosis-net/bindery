@@ -585,7 +585,12 @@ def move_output_file(produced_file: str, target_dir: str,
     # both picking the same collision-free name and overwriting each other.
     with _output_move_lock:
         dest = _collision_free(os.path.join(target_dir, filename))
-        shutil.move(produced_file, dest)
+        # Content only when the move has to copy across filesystems. The
+        # default copy2 also replays mode and timestamps onto the new file,
+        # and a NAS mount that forces ownership (bindfs force-user, SMB) makes
+        # utime/chmod fail with EPERM for a container uid that differs, so
+        # the output landed but the job was still marked failed.
+        shutil.move(produced_file, dest, copy_function=shutil.copyfile)
     return dest
 
 

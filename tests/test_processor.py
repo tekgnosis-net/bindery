@@ -1,4 +1,5 @@
 import json
+import shutil
 import os
 import sys
 import time
@@ -1286,3 +1287,25 @@ def test_run_conversion_kills_on_timeout():
     with pytest.raises(RuntimeError, match='timed out'):
         processor._run_conversion([sys.executable, '-c', 'import time; time.sleep(30)'],
                                   'slow', timeout=1)
+
+
+def test_move_output_file_survives_copystat_eperm(tmp_path, monkeypatch):
+    """A bindfs/SMB mount that forces ownership lets the content copy through
+    but refuses utime/chmod from a different uid. The output must still land
+    rather than the job failing after a complete conversion."""
+    src = tmp_path / 'src'; dst = tmp_path / 'dst'
+    src.mkdir()
+    produced = src / 'Comic.cbz'
+    produced.write_bytes(b'z' * 10)
+
+    def refuse(*a, **k):
+        raise PermissionError(1, 'Operation not permitted')
+    monkeypatch.setattr(shutil, 'copystat', refuse)
+    monkeypatch.setattr(shutil, 'copymode', refuse)
+    # Force the cross-device path that makes shutil.move copy instead of rename.
+    monkeypatch.setattr(os, 'rename', lambda *a, **k: (_ for _ in ()).throw(OSError(18, 'Invalid cross-device link')))
+
+    dest = processor.move_output_file(str(produced), str(dst))
+    assert dest == str(dst / 'Comic.cbz')
+    assert (dst / 'Comic.cbz').read_bytes() == b'z' * 10
+    assert not produced.exists()

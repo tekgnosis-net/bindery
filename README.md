@@ -202,6 +202,7 @@ Nothing converts a Kindle book straight to kepub, because a kepub is an EPUB wit
 
 - Bindery watches `/Books_in`, `/Comics_in` and `/Comics_raw` using either **poll** mode (every 10 s, NAS/SMB/NFS compatible) or **inotify** mode (instant on local filesystems, with a 60 s backstop scan for anything events miss).
 - Each file gets a per-file lock so the same file is never processed twice concurrently.
+- Converted files carry the time they were written to the output folder, not the source's timestamps. Copying content only is what lets output land on NFS, SMB or bindfs mounts that refuse timestamp and mode changes from the container's user.
 - Subfolder structure is preserved for individually converted files: `Comics_in/Marvel/issue01.cbz` converts to `Comics_out/Marvel/issue01.kepub`, and books work the same way. Device profile folders mirror too: `Comics_in/kobo/x.cbz` comes out in `Comics_out/kobo/`.
 - A folder of images dropped into `Comics_in` is one bundled job: a single volume named after the folder, with subfolders as chapters. With **Bundle Chapter Folders** enabled, a folder of chapter archives works the same way: one volume, a chapter per archive. Processing starts once nothing inside has changed for the File Stability Timeout (minimum 30 s).
 - On success: converted file is moved to the output folder. The source is then deleted, moved to `Comics_in/.archive`, or left exactly where it is, according to the **Originals** setting.

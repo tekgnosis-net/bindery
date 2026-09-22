@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **Output on a mount that forces file ownership no longer fails the job.** On a bindfs or SMB mount that presents every file as one fixed owner, copying the finished book into the output folder succeeded but replaying its timestamps and mode then failed with `[Errno 1] Operation not permitted` when `PUID` differed from that owner, so the source was renamed `.failed` next to a perfectly good output. The move now copies content only.
 - **No KEPUB Extension no longer looks like it applies to books.** The setting is a KCC option and only ever affected comics, but nothing in the UI said so, so ticking it and dropping an EPUB into `Books_in` looked like a bug. It is now labelled as comics only, and books have their own extension setting.
 
 ## v4.2.1: Keep-in-Place Fixes
