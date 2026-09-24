@@ -1309,3 +1309,208 @@ def test_move_output_file_survives_copystat_eperm(tmp_path, monkeypatch):
     assert dest == str(dst / 'Comic.cbz')
     assert (dst / 'Comic.cbz').read_bytes() == b'z' * 10
     assert not produced.exists()
+
+
+# ── Format priority: one conversion per book when a folder holds several ─────
+
+def _prio_config(priority='epub, azw3, kfx, mobi', boko=True):
+    config = dict(DEFAULT_CONFIG)
+    config['book_boko_enabled'] = boko
+    config['book_format_priority'] = priority
+    return config
+
+
+@pytest.mark.parametrize('raw,expected', [
+    ('epub, azw3, kfx, mobi', ['.epub', '.azw3', '.kfx', '.mobi']),
+    ('',                      []),                     # blank: convert every format
+    ('   ',                   []),
+    ('mobi',                  ['.mobi', '.epub', '.azw3', '.kfx']),   # unlisted follow in default order
+    ('.AZW3; epub,azw3',      ['.azw3', '.epub', '.kfx', '.mobi']),   # dots, case, separators, duplicates
+    ('pdf, cbz',              ['.epub', '.azw3', '.kfx', '.mobi']),   # nothing usable: default, not off
+    (None,                    ['.epub', '.azw3', '.kfx', '.mobi']),   # hand-edited JSON null
+    (42,                      ['.epub', '.azw3', '.kfx', '.mobi']),
+])
+def test_book_format_priority_parsing(raw, expected):
+    assert processor.book_format_priority({'book_format_priority': raw}) == expected
+
+
+@pytest.mark.parametrize('raw,expected', [
+    ('epub, azw3, kfx, mobi', 'epub, azw3, kfx, mobi'),
+    ('  ',                    ''),
+    ('MOBI;.epub  epub',      'mobi, epub'),
+    ('pdf',                   'epub, azw3, kfx, mobi'),
+    (None,                    'epub, azw3, kfx, mobi'),
+])
+def test_normalize_book_format_priority(raw, expected):
+    assert processor.normalize_book_format_priority(raw) == expected
+
+
+def _touch(folder, *names):
+    folder.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (folder / n).write_bytes(b'x')
+
+
+def test_book_superseded_prefers_higher_priority_sibling(tmp_path):
+    _touch(tmp_path, 'Dune.epub', 'Dune.azw3', 'dune.MOBI', 'Other.mobi')
+    config = _prio_config()
+    with patch('processor._boko_available', return_value=True):
+        assert processor._book_superseded(str(tmp_path / 'Dune.epub'), config) is None
+        assert processor._book_superseded(str(tmp_path / 'Dune.azw3'), config) == str(tmp_path / 'Dune.epub')
+        assert processor._book_superseded(str(tmp_path / 'dune.MOBI'), config) == str(tmp_path / 'Dune.epub')
+        assert processor._book_superseded(str(tmp_path / 'Other.mobi'), config) is None
+
+
+def test_book_superseded_follows_configured_order(tmp_path):
+    _touch(tmp_path, 'Dune.epub', 'Dune.kfx')
+    config = _prio_config('kfx, epub')
+    with patch('processor._boko_available', return_value=True):
+        assert processor._book_superseded(str(tmp_path / 'Dune.kfx'), config) is None
+        assert processor._book_superseded(str(tmp_path / 'Dune.epub'), config) == str(tmp_path / 'Dune.kfx')
+
+
+def test_book_superseded_off_when_priority_blank_or_kindle_disabled(tmp_path):
+    _touch(tmp_path, 'Dune.epub', 'Dune.mobi')
+    with patch('processor._boko_available', return_value=True):
+        assert processor._book_superseded(str(tmp_path / 'Dune.mobi'), _prio_config('')) is None
+    # With Kindle formats off the .mobi is not a book at all, so nothing ranks.
+    assert processor.book_exts(_prio_config(boko=False)) == {'.epub'}
+    assert processor._book_superseded(str(tmp_path / 'Dune.epub'), _prio_config(boko=False)) is None
+
+
+def test_failed_winner_hands_over_to_next_format(tmp_path):
+    _touch(tmp_path, 'Dune.epub.failed', 'Dune.azw3', 'Dune.mobi')
+    config = _prio_config()
+    with patch('processor._boko_available', return_value=True):
+        assert processor._book_superseded(str(tmp_path / 'Dune.azw3'), config) is None
+        assert processor._book_superseded(str(tmp_path / 'Dune.mobi'), config) == str(tmp_path / 'Dune.azw3')
+
+
+@pytest.mark.parametrize('rel,expected', [
+    ('Dune.epub',             True),
+    ('Dune.azw3',             False),   # superseded by Dune.epub
+    ('Dune.pdf',              False),   # not a book extension
+    ('.Hidden.epub',          False),
+    ('.uploading/Up.epub',    False),
+    ('Old.failed/Book.epub',  False),
+    ('Dune.epub.failed',      False),
+])
+def test_book_job_candidate(tmp_path, rel, expected):
+    books_in = tmp_path / 'books_in'
+    _touch(books_in, 'Dune.epub', 'Dune.azw3', 'Dune.pdf', '.Hidden.epub', 'Dune.epub.failed')
+    _touch(books_in / '.uploading', 'Up.epub')
+    _touch(books_in / 'Old.failed', 'Book.epub')
+    with patch.object(processor, 'BOOKS_IN', str(books_in)), \
+         patch('processor._boko_available', return_value=True):
+        assert processor._book_job_candidate(str(books_in / rel), _prio_config()) is expected
+
+
+def test_scan_directories_dispatches_only_the_winner(tmp_path):
+    books_in = tmp_path / 'books_in'
+    _touch(books_in / 'Herbert', 'Dune.epub', 'Dune.azw3', 'Dune.mobi')
+    _touch(books_in / 'Gibson', 'Neuromancer.mobi', 'Neuromancer.azw3')
+    _touch(books_in, 'Solo.kfx')
+    seen = []
+    processor.PROCESSING_LOCKS.clear()
+    with patch.object(processor, 'BOOKS_IN', str(books_in)), \
+         patch.object(processor, 'COMICS_IN', str(tmp_path / 'none')), \
+         patch('processor.load_config', return_value=_prio_config()), \
+         patch('processor._boko_available', return_value=True), \
+         patch('processor.process_file', side_effect=lambda p, t: seen.append(os.path.relpath(p, books_in))):
+        processor.scan_directories()
+        time.sleep(0.2)
+    processor.PROCESSING_LOCKS.clear()
+    assert sorted(seen) == ['Gibson/Neuromancer.azw3', 'Herbert/Dune.epub', 'Solo.kfx']
+
+
+def _prio_run(tmp_path, config, fail_on=None):
+    """fake _run_conversion: boko writes an EPUB, kepubify writes <stem>.kepub."""
+    calls = []
+
+    def fake_run(cmd, short, timeout=None):
+        calls.append(cmd[0])
+        if fail_on and fail_on in cmd[-1]:
+            raise processor.ConversionError(1)
+        if cmd[0] == 'boko':
+            with open(cmd[3], 'wb') as f:
+                f.write(b'e' * 80)
+        else:
+            out = cmd[cmd.index('--output') + 1]
+            os.makedirs(out, exist_ok=True)
+            stem = os.path.splitext(os.path.basename(cmd[-1]))[0]
+            with open(os.path.join(out, stem + '.kepub'), 'wb') as f:
+                f.write(b'y' * 50)
+    return calls, fake_run
+
+
+def test_winner_success_deletes_lower_priority_siblings(tmp_path):
+    books_in = tmp_path / 'books_in'
+    _touch(books_in, 'Dune.epub', 'Dune.azw3', 'Dune.mobi', 'Dune.jpg', 'Other.mobi')
+    calls, fake_run = _prio_run(tmp_path, _prio_config())
+    logged = []
+    with _boko_env(tmp_path, _prio_config(), fake_run), \
+         patch('processor.log', side_effect=logged.append):
+        processor.process_file(str(books_in / 'Dune.epub'), 'book')
+
+    assert calls == ['kepubify']
+    assert os.listdir(tmp_path / 'books_out') == ['Dune.kepub']
+    # The cover and the unrelated book stay; the other formats go.
+    assert sorted(os.listdir(books_in)) == ['Dune.jpg', 'Other.mobi']
+    assert sum('>>> SUPERSEDED:' in line for line in logged) == 2
+
+
+def test_winner_success_keeps_siblings_when_priority_blank(tmp_path):
+    books_in = tmp_path / 'books_in'
+    _touch(books_in, 'Dune.epub', 'Dune.mobi')
+    _calls, fake_run = _prio_run(tmp_path, _prio_config(''))
+    with _boko_env(tmp_path, _prio_config(''), fake_run):
+        processor.process_file(str(books_in / 'Dune.epub'), 'book')
+    assert os.listdir(books_in) == ['Dune.mobi']
+
+
+def test_winner_success_leaves_sibling_that_is_mid_conversion(tmp_path):
+    books_in = tmp_path / 'books_in'
+    _touch(books_in, 'Dune.epub', 'Dune.mobi')
+    _calls, fake_run = _prio_run(tmp_path, _prio_config())
+    busy = str(books_in / 'Dune.mobi')
+    processor.PROCESSING_LOCKS.add(busy)
+    try:
+        with _boko_env(tmp_path, _prio_config(), fake_run):
+            processor.process_file(str(books_in / 'Dune.epub'), 'book')
+    finally:
+        processor.PROCESSING_LOCKS.discard(busy)
+    assert os.listdir(books_in) == ['Dune.mobi']
+
+
+def test_winner_failure_keeps_siblings_for_fallback(tmp_path):
+    books_in = tmp_path / 'books_in'
+    _touch(books_in, 'Dune.epub', 'Dune.azw3', 'Dune.mobi')
+    _calls, fake_run = _prio_run(tmp_path, _prio_config(), fail_on='Dune.epub')
+    with _boko_env(tmp_path, _prio_config(), fake_run):
+        processor.process_file(str(books_in / 'Dune.epub'), 'book')
+    assert sorted(os.listdir(books_in)) == ['Dune.azw3', 'Dune.epub.failed', 'Dune.mobi']
+    with patch('processor._boko_available', return_value=True):
+        assert processor._book_superseded(str(books_in / 'Dune.azw3'), _prio_config()) is None
+
+
+def test_process_file_skips_when_better_format_arrives_during_wait(tmp_path):
+    """inotify can dispatch Dune.mobi before Dune.epub has finished copying in;
+    the re-check after the readiness wait must stand the .mobi down."""
+    books_in = tmp_path / 'books_in'
+    _touch(books_in, 'Dune.mobi')
+    calls, fake_run = _prio_run(tmp_path, _prio_config())
+
+    def ready(path, timeout):
+        (books_in / 'Dune.epub').write_bytes(b'x')
+        return True
+
+    logged = []
+    with _boko_env(tmp_path, _prio_config(), fake_run), \
+         patch('processor.wait_for_file_ready', side_effect=ready), \
+         patch('processor.log', side_effect=logged.append):
+        processor.process_file(str(books_in / 'Dune.mobi'), 'book')
+
+    assert calls == []
+    assert sorted(os.listdir(books_in)) == ['Dune.epub', 'Dune.mobi']
+    assert processor.JOB_REGISTRY == {}
+    assert any('SKIP (superseded by Dune.epub)' in line for line in logged)

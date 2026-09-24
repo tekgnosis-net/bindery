@@ -377,3 +377,29 @@ def test_post_saves_boko_toggle(client, tmp_path):
     assert saved['book_boko_enabled'] is True
     saved, _ = _post(client, tmp_path)
     assert saved['book_boko_enabled'] is False
+
+
+@pytest.mark.parametrize('submitted,stored', [
+    ('epub, azw3, kfx, mobi', 'epub, azw3, kfx, mobi'),
+    ('KFX; .epub',            'kfx, epub'),
+    ('',                      ''),                        # blank: convert every format
+    ('pdf, cbz',              'epub, azw3, kfx, mobi'),   # nothing usable: default
+])
+def test_post_normalises_book_format_priority(client, tmp_path, submitted, stored):
+    saved, _ = _post(client, tmp_path, book_format_priority=submitted)
+    assert saved['book_format_priority'] == stored
+
+
+def test_post_without_priority_field_keeps_default(client, tmp_path):
+    saved, _ = _post(client, tmp_path)
+    assert saved['book_format_priority'] == cfg.DEFAULT_CONFIG['book_format_priority']
+
+
+def test_index_renders_format_priority_field(client, tmp_path):
+    (tmp_path / 'settings.json').write_text(json.dumps({'book_format_priority': 'kfx, epub'}))
+    with patch.object(cfg, 'CONFIG_FILE', str(tmp_path / 'settings.json')), \
+         patch.object(cfg, 'CONFIG_DIR', str(tmp_path)):
+        html = client.get('/').data.decode()
+    assert 'name="book_format_priority"' in html
+    assert 'value="kfx, epub"' in html
+    assert 'id="book_boko_enabled"' in html
