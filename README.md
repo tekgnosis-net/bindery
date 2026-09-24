@@ -170,6 +170,7 @@ Books dropped into `Books_in` are converted by [kepubify](https://github.com/pga
 | Find and Replace | *(blank)* | One `find\|replace` rule per line, applied to each HTML file in the book. Lines without a separator are ignored, because kepubify aborts the whole conversion on a malformed rule. |
 | Charset Override | *(blank)* | Blank uses utf-8. Set `auto` to detect the charset from the content. |
 | Convert Kindle Formats | Off | Also accept DRM-free `.kfx`, `.azw3` and `.mobi` in `Books_in`. See below. |
+| Format Priority | `epub, azw3, kfx, mobi` | Which format converts when one folder holds the same book in several. Shown once Convert Kindle Formats is on. See below. |
 
 ### Kindle formats
 
@@ -179,6 +180,17 @@ Nothing converts a Kindle book straight to kepub, because a kepub is an EPUB wit
 - **Best effort.** boko is a young project; complex layouts, fonts and footnotes may not survive perfectly. Like every book, the source is deleted after a successful conversion, so keep your originals elsewhere. A file boko cannot read is renamed `.failed` and left alone.
 - **Off by default** so that Kindle files already sitting in `Books_in` are not converted and removed by surprise after an update.
 - **amd64 and arm64 images only.** boko publishes no 32-bit builds; on other architectures the setting has no effect.
+
+#### One book, several formats
+
+Library exports often hold the same book several times over: `Dune.epub`, `Dune.azw3` and `Dune.mobi` side by side. Converting each would give `Dune.kepub`, `Dune_2.kepub` and `Dune_3.kepub`, so with Kindle formats on only one of them converts, picked by **Format Priority**:
+
+- Files count as the same book when they sit in the same folder and share a name apart from the extension, ignoring case.
+- The first format in the list wins. Formats you leave out follow in the default order `epub, azw3, kfx, mobi`, so `kfx` alone means KFX first and then the rest as usual. A value naming no known format falls back to the default.
+- Once the winner converts, the other formats of that book are deleted, just as they would have been had each converted. Each deletion is logged as `SUPERSEDED`.
+- If the winner fails, it is renamed `.failed` like any other failure and the next format in the list converts on the next scan instead.
+- The formats have to be in the folder together. A format that arrives after the winner has already converted and gone converts on its own.
+- Blank the field to convert every format, as before.
 
 | Environment variable | Default | Range | Purpose |
 |---|---|---|---|

@@ -752,6 +752,131 @@ def book_exts(config: ConfigDict) -> set[str]:
     return set(BOOK_EXTS)
 
 
+def normalize_book_format_priority(raw) -> str:
+    """Canonical form of the book_format_priority setting.
+
+    Blank stays blank, meaning convert every format. A value that is not a
+    string, or names no known format, falls back to the default: a typo must
+    not quietly switch the feature off and bring back the duplicates.
+    """
+    default = DEFAULT_CONFIG['book_format_priority']
+    if not isinstance(raw, str):
+        return default
+    if not raw.strip():
+        return ''
+    known  = {ext.lstrip('.') for ext in BOOK_EXTS | BOKO_EXTS}
+    picked = []
+    for token in re.split(r'[\s,;]+', raw.lower()):
+        token = token.lstrip('.')
+        if token in known and token not in picked:
+            picked.append(token)
+    return ', '.join(picked) if picked else default
+
+
+def book_format_priority(config: ConfigDict) -> list[str]:
+    """Book extensions in preference order, or [] to convert every format.
+
+    Formats the setting leaves out follow in the default order, so a partial
+    list such as 'kfx' still ranks every pair of siblings deterministically.
+    """
+    chosen = normalize_book_format_priority(config.get('book_format_priority'))
+    if not chosen:
+        return []
+    order = chosen.split(', ')
+    for token in normalize_book_format_priority(None).split(', '):
+        if token not in order:
+            order.append(token)
+    return ['.' + token for token in order]
+
+
+def _book_rank(path: str, order: list[str]) -> tuple[int, str]:
+    # The name breaks ties (Dune.epub beside dune.EPUB) so every watcher and
+    # every thread agrees on one winner.
+    ext = os.path.splitext(path)[1].lower()
+    return (order.index(ext) if ext in order else len(order), os.path.basename(path))
+
+
+def _book_siblings(path: str, exts: set[str]) -> list[str]:
+    """Other files in path's folder holding the same book in another format.
+
+    Same name minus the extension, compared case-insensitively. A .failed
+    file ends in .failed, not a book extension, so a failed winner drops out
+    and the next format in line takes over.
+    """
+    folder, name = os.path.split(path)
+    stem = os.path.splitext(name)[0].casefold()
+    try:
+        entries = os.listdir(folder)
+    except OSError:
+        return []
+    found = []
+    for entry in entries:
+        if entry == name or entry.startswith('.'):
+            continue
+        entry_stem, ext = os.path.splitext(entry)
+        if ext.lower() in exts and entry_stem.casefold() == stem:
+            sibling = os.path.join(folder, entry)
+            if os.path.isfile(sibling):
+                found.append(sibling)
+    return found
+
+
+def _book_superseded(path: str, config: ConfigDict,
+                     exts: set[str] | None = None) -> str | None:
+    """The sibling that should convert instead of path, or None."""
+    order = book_format_priority(config)
+    if not order:
+        return None
+    exts = book_exts(config) if exts is None else exts
+    mine = _book_rank(path, order)
+    better = [s for s in _book_siblings(path, exts) if _book_rank(s, order) < mine]
+    return min(better, key=lambda s: _book_rank(s, order)) if better else None
+
+
+def _book_job_candidate(path: str, config: ConfigDict) -> bool:
+    """Whether a file under Books_in should become a book job right now.
+
+    scan_directories and the inotify handler both ask this, because the
+    handler is only a latency shortcut and has to reach the scan's decision.
+    """
+    exts = book_exts(config)
+    if os.path.splitext(path)[1].lower() not in exts:
+        return False
+    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(BOOKS_IN))
+    if any(part.startswith('.') or part.endswith('.failed') for part in rel.split(os.sep)):
+        return False
+    return _book_superseded(path, config, exts) is None
+
+
+def _discard_superseded_siblings(filepath: str, config: ConfigDict) -> None:
+    """Delete the lower-priority formats of a book that just converted.
+
+    Called before the source itself is removed: until then the source still
+    outranks them, so no scan can pick one up in between. Books never keep
+    their source, so this deletes nothing that converting every format would
+    not also have deleted, only without the _2/_3 duplicate outputs.
+    """
+    order = book_format_priority(config)
+    if not order:
+        return
+    mine  = _book_rank(filepath, order)
+    short = os.path.basename(filepath)
+    for sibling in _book_siblings(filepath, book_exts(config)):
+        if _book_rank(sibling, order) <= mine:
+            continue
+        with lock_mutex:
+            # Already converting: pulling the file out from under it would
+            # only turn a duplicate into a failure.
+            if sibling in PROCESSING_LOCKS:
+                continue
+            try:
+                os.remove(sibling)
+            except OSError as e:
+                log(f">>> WARN: could not remove superseded {os.path.basename(sibling)}: {e}")
+                continue
+        log(f">>> SUPERSEDED: {os.path.basename(sibling)} ({short} converted)")
+
+
 def _build_boko_cmd(filepath: str, epub_out: str) -> list[str]:
     # Both paths are absolute, so a filename with a leading dash cannot be
     # read as an option.
@@ -826,6 +951,18 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
                 _save_job_registry()
             return
 
+        if c_type == 'book':
+            # inotify can fire for Dune.mobi before Dune.epub has finished
+            # copying in, so the dispatch-time check is repeated here, after
+            # the wait has given the siblings time to land.
+            better = _book_superseded(filepath, config)
+            if better:
+                log(f">>> SKIP (superseded by {os.path.basename(better)}): {short}")
+                with job_registry_lock:
+                    JOB_REGISTRY.pop(job_id, None)
+                    _save_job_registry()
+                return
+
         if c_type == 'comic':
             filepath = _strip_leading_dash(filepath, job_id)
             short    = os.path.basename(filepath)[:40]
@@ -887,6 +1024,8 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
                 if book_ext not in ('kepub', 'kepub.epub', 'epub'):
                     book_ext = 'kepub'
             dests = [move_output_file(f, target_dir, book_ext) for f in produced]
+            if c_type == 'book':
+                _discard_superseded_siblings(filepath, config)
             if os.path.exists(filepath):
                 if mode == 'keep':
                     _mark_converted(filepath, dests)
@@ -1120,12 +1259,12 @@ def _extract_chapter_folder(folderpath: str) -> tuple[str, str]:
 
 
 def scan_directories() -> None:
-    exts = book_exts(load_config())
+    book_config = load_config()
     for root, dirs, files in os.walk(BOOKS_IN):
         dirs[:] = [d for d in dirs if not d.startswith('.') and not d.endswith('.failed')]
         for f in files:
-            if os.path.splitext(f)[1].lower() in exts and not f.endswith('.failed'):
-                path = os.path.join(root, f)
+            path = os.path.join(root, f)
+            if _book_job_candidate(path, book_config):
                 with lock_mutex:
                     if path not in PROCESSING_LOCKS:
                         PROCESSING_LOCKS.add(path)
@@ -1218,15 +1357,17 @@ def inotify_watch_loop() -> None:
         def __init__(self, c_type: str) -> None:
             self.c_type = c_type
         def _maybe_dispatch(self, path: str) -> None:
-            # Book extensions follow a live setting, so resolve them per
-            # event the way scan_directories does per scan.
-            exts = book_exts(load_config()) if self.c_type == 'book' else COMIC_EXTS
-            if os.path.splitext(path)[1].lower() not in exts:
-                return
-            if any(part.startswith('.') or part.endswith('.failed')
-                   for part in path.split(os.sep) if part):
-                return
-            if self.c_type == 'comic':
+            if self.c_type == 'book':
+                # Book extensions and format priority follow live settings,
+                # so resolve them per event the way scan_directories does.
+                if not _book_job_candidate(path, load_config()):
+                    return
+            else:
+                if os.path.splitext(path)[1].lower() not in COMIC_EXTS:
+                    return
+                if any(part.startswith('.') or part.endswith('.failed')
+                       for part in path.split(os.sep) if part):
+                    return
                 config = load_config()
                 base   = COMICS_IN
                 rel    = os.path.relpath(os.path.abspath(path), os.path.abspath(COMICS_IN))

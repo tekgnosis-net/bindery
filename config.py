@@ -53,6 +53,10 @@ DEFAULT_CONFIG: ConfigDict = {
     # Off by default: books delete their source after converting, so turning
     # this on for someone with stray .mobi files in Books_in would eat them.
     'book_boko_enabled':         False,
+    # Calibre-style folders often hold one book as .epub, .azw3 and .mobi.
+    # Converting each gave Book.kepub, Book_2.kepub and Book_3.kepub, so only
+    # the first format listed converts. Blank restores convert-everything.
+    'book_format_priority':      'epub, azw3, kfx, mobi',
     'file_wait_timeout':     60,
     'watcher_mode':          'poll',
     'apprise_urls':          '',

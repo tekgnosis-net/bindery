@@ -14,7 +14,7 @@ from processor import (
     LOG_BUFFER, log_lock, log, watch_loop, inotify_watch_loop,
     _load_log_history, _load_job_registry, _load_converted_ledger, _load_stats, _collision_free,
     JOB_REGISTRY, job_registry_lock, retry_file, STATS, stats_lock,
-    COMIC_EXTS, book_exts,
+    COMIC_EXTS, book_exts, normalize_book_format_priority,
     BOOKS_IN, BOOKS_OUT, COMICS_IN, COMICS_OUT,
 )
 from raw_processor import raw_watch_loop, raw_inotify_watch_loop
@@ -97,6 +97,9 @@ def _validate_post(config: ConfigDict) -> ConfigDict:
         if '|' in line)
 
     config['book_css'] = (config.get('book_css') or '')[:10000]
+
+    config['book_format_priority'] = normalize_book_format_priority(
+        config.get('book_format_priority'))
 
     config['apprise_urls'] = config.get('apprise_urls', '')
 
@@ -302,7 +305,8 @@ def create_app(start_threads: bool = True) -> Flask:
                         'kcc_croppingminimum', 'kcc_splitter', 'kcc_gamma', 'kcc_batchsplit',
                         'kcc_borders', 'kcc_author', 'kcc_customwidth', 'kcc_customheight',
                         'book_extension', 'book_hyphenate', 'book_dummy_titlepage',
-                        'book_css', 'book_replace', 'book_charset'):
+                        'book_css', 'book_replace', 'book_charset',
+                        'book_format_priority'):
                 config[key] = request.form.get(key, DEFAULT_CONFIG.get(key, ''))
             for key in ('kcc_manga_style', 'kcc_hq', 'kcc_two_panel', 'kcc_webtoon',
                         'kcc_forcecolor', 'kcc_colorautocontrast', 'kcc_colorcurve',

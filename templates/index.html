@@ -773,6 +773,13 @@
                     </select>
                 </div>
                 <p class="note">A Kobo recognises <code>.kepub.epub</code> when you copy books to it over USB. Library managers such as Calibre and Calibre-Web-Automated expect <code>.kepub</code>. Choose <code>.epub</code> to leave the converted file looking like an ordinary EPUB. Unless this is <code>.kepub</code>, <code>Books_in</code> and <code>Books_out</code> must be different folders &mdash; the other two extensions still end in <code>.epub</code>, so a shared folder rescans its own output as new input and converts it again on every pass.</p>
+                <div class="field" id="book_priority_field" style="margin-top:14px">
+                    <label class="lbl">Format Priority</label>
+                    <input type="text" name="book_format_priority" id="book_format_priority"
+                           placeholder="Blank to convert every format"
+                           value="{{ config.book_format_priority }}">
+                </div>
+                <p class="note" id="book_priority_note">When a folder holds the same book in several formats (same name, different extension), only the first one listed here converts, and the others are deleted once it succeeds. If it fails, the next format takes over. Formats you leave out follow in the default order. Blank converts every format.</p>
             </div>
             <div>
                 <div class="checks">
@@ -791,7 +798,7 @@
                         </span>
                     </label>
                     <label class="check">
-                        <input type="checkbox" name="book_boko_enabled" {% if config.book_boko_enabled %}checked{% endif %}>
+                        <input type="checkbox" name="book_boko_enabled" id="book_boko_enabled" {% if config.book_boko_enabled %}checked{% endif %}>
                         <span>
                             <div class="check-label">Convert Kindle Formats</div>
                             <div class="check-hint">Also accept DRM-free .kfx, .azw3 and .mobi: boko turns them into an EPUB first, then kepubify takes over. Best effort, and the source is deleted after a successful conversion like any other book.</div>
@@ -992,6 +999,15 @@
     }
     document.getElementById('kcc_profile').addEventListener('change', toggleCustomFields);
     toggleCustomFields();
+
+    /* ── Format priority only matters once Kindle formats are books ── */
+    function togglePriorityFields() {
+        var display = document.getElementById('book_boko_enabled').checked ? '' : 'none';
+        document.getElementById('book_priority_field').style.display = display;
+        document.getElementById('book_priority_note').style.display  = display;
+    }
+    document.getElementById('book_boko_enabled').addEventListener('change', togglePriorityFields);
+    togglePriorityFields();
 
     /* ── Shared helpers ── */
     function escHtml(s) {
