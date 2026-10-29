@@ -12,7 +12,7 @@ from flask import Flask, jsonify, request, render_template, send_file
 from config import DEFAULT_CONFIG, KCC_KEYS, load_config, save_config, ConfigDict
 from processor import (
     LOG_BUFFER, log_lock, log, watch_loop, inotify_watch_loop, GCC_PROFILES,
-    _load_log_history, _load_job_registry, _load_converted_ledger, _load_stats, _collision_free,
+    _load_log_history, _log_timezone, _load_job_registry, _load_converted_ledger, _load_stats, _collision_free,
     JOB_REGISTRY, job_registry_lock, retry_file, STATS, stats_lock,
     COMIC_EXTS, book_exts, normalize_book_format_priority,
     BOOKS_IN, BOOKS_OUT, COMICS_IN, COMICS_OUT,
@@ -395,6 +395,7 @@ def create_app(start_threads: bool = True) -> Flask:
     # they would be killed on fork, and the worker would run with dead watchers.
     if start_threads:
         _load_log_history()
+        _log_timezone()
         _load_job_registry()
         _load_converted_ledger()
         _load_stats()

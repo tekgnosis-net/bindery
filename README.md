@@ -76,6 +76,7 @@ services:
     environment:
       - PUID=1000   # replace with your uid
       - PGID=1000   # replace with your gid
+      - TZ=${TZ:-UTC}   # zone for log timestamps, e.g. Australia/Sydney
       # - SKIP_CHOWN=true   # uncomment for NFS/SMB volumes the container can't chown (e.g. unprivileged LXC)
       - BINDERY_BOKO_TIMEOUT=${BINDERY_BOKO_TIMEOUT:-600}   # seconds a Kindle-format pre-conversion may run (30-7200)
     volumes:
@@ -226,6 +227,7 @@ Library exports often hold the same book several times over: `Dune.epub`, `Dune.
 | Environment variable | Default | Range | Purpose |
 |---|---|---|---|
 | `BINDERY_BOKO_TIMEOUT` | `600` | 30 to 7200 | Seconds one boko run may take before it is killed and the book marked failed. Read on every conversion, so a container recreate is all a change needs. |
+| `TZ` | `UTC` | any tz database name | Zone for the timestamp on every activity log line, in the WebUI, `bindery.log` and `docker logs`. Job times are stored in UTC and shown in your browser's local time regardless. |
 
 ---
 
@@ -251,6 +253,7 @@ Library exports often hold the same book several times over: `Dune.epub`, `Dune.
 - On success: converted file is moved to the output folder. The source is then deleted, moved to `Comics_in/.archive`, or left exactly where it is, according to the **Originals** setting.
 - On failure: the source is renamed to `<filename>.failed` and will not be retried automatically. Use the Retry button in the WebUI to re-queue it.
 - Raw image folders in `Comics_raw` are held until stable (no file changes for 30 s) before processing begins.
+- Every activity log line is stamped with the container's local time, set by the `TZ` environment variable (UTC when unset). The first log line after a start names the zone in effect.
 - Live logs are shown in the WebUI and streamed to `docker logs`.
 - The WebUI has no authentication: keep port 5000 on your LAN or behind a VPN; don't forward it to the internet.
 

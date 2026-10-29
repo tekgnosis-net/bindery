@@ -1755,3 +1755,47 @@ class _nest:
         for p in reversed(self.patchers):
             p.stop()
         return False
+
+
+# ── Log timestamps ────────────────────────────────────────────────────────────
+
+_STAMP = r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} '
+
+
+def test_log_prefixes_local_timestamp(tmp_path):
+    import re
+    with patch.object(processor, 'LOG_FILE', str(tmp_path / 'bindery.log')):
+        processor.LOG_BUFFER.clear()
+        processor.log('>>> hello')
+    line = processor.LOG_BUFFER[-1]
+    assert re.match(_STAMP + r'>>> hello$', line), line
+    assert (tmp_path / 'bindery.log').read_text() == line + '\n'
+
+
+def test_log_timestamp_follows_tz(tmp_path):
+    """The stamp is container local time: a fixed-offset TZ shifts it by
+    exactly that offset from UTC."""
+    from datetime import datetime, timezone
+    with patch.object(processor, 'LOG_FILE', str(tmp_path / 'bindery.log')), \
+         patch.dict(os.environ, {'TZ': 'UTC-5'}):   # POSIX sign: UTC-5 is UTC+05:00
+        time.tzset()
+        try:
+            processor.LOG_BUFFER.clear()
+            processor.log('x')
+            stamped = datetime.strptime(processor.LOG_BUFFER[-1][:19], '%Y-%m-%d %H:%M:%S')
+            utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        finally:
+            pass
+    # Outside the patch.dict block so the restored TZ is what tzset reads;
+    # otherwise the shifted zone would bleed into every later test.
+    time.tzset()
+    delta = (stamped - utc_now).total_seconds()
+    assert 5 * 3600 - 5 <= delta <= 5 * 3600 + 5, delta
+
+
+def test_log_timezone_line_names_zone(tmp_path):
+    with patch.object(processor, 'LOG_FILE', str(tmp_path / 'bindery.log')), \
+         patch.dict(os.environ, {'TZ': 'Australia/Sydney'}):
+        processor.LOG_BUFFER.clear()
+        processor._log_timezone()
+    assert 'Timezone: Australia/Sydney' in processor.LOG_BUFFER[-1]

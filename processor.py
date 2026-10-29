@@ -71,7 +71,11 @@ stats_lock = threading.Lock()
 
 
 def log(msg: str) -> None:
-    line = msg.rstrip()
+    # Naive datetime.now() on purpose: libc resolves it through TZ, so the
+    # stamp follows the container's zone. Job records stay UTC (see _now)
+    # and are localised by the browser; this prefix is for humans reading
+    # the log panel, bindery.log, or docker logs.
+    line = datetime.now().strftime('%Y-%m-%d %H:%M:%S ') + msg.rstrip()
     with log_lock:
         LOG_BUFFER.append(line)
         try:
@@ -81,6 +85,13 @@ def log(msg: str) -> None:
             pass
     sys.stdout.write(line + '\n')
     sys.stdout.flush()
+
+
+def _log_timezone() -> None:
+    """One line at startup naming the zone in effect, so a mistyped TZ shows
+    up as 'UTC' in the log instead of silently shifting every stamp."""
+    log(f">>> Timezone: {os.environ.get('TZ') or 'UTC (TZ not set)'} "
+        f"(local {time.strftime('%H:%M %z')})")
 
 
 def _load_log_history() -> None:

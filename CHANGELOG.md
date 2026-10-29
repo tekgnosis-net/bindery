@@ -8,6 +8,8 @@
 - **Format priority for books**: when a folder holds the same book in several formats, such as `Dune.epub`, `Dune.azw3` and `Dune.mobi`, only one converts instead of producing `Dune.kepub`, `Dune_2.kepub` and `Dune_3.kepub`. The new **Format Priority** setting picks which (default `epub, azw3, kfx, mobi`); the other formats are deleted once it succeeds, and if it fails the next format converts instead. Blank converts every format as before. Only relevant with **Convert Kindle Formats** on.
 - **Output extension for books**: choose `.kepub` (the default, and what Calibre and Calibre-Web-Automated expect), `.kepub.epub` (what a Kobo recognises when you copy books to it over USB), or plain `.epub`.
 
+- **Timestamps on log lines**: every activity log line now starts with the date and time in the container's local zone, set with the new `TZ` environment variable in `docker-compose.yml` (UTC when unset). The first line after a start names the zone in use. Job times in the status table are unchanged: stored in UTC, shown in your browser's local time.
+
 ### Fixed
 
 - **Output on a mount that forces file ownership no longer fails the job.** On a bindfs or SMB mount that presents every file as one fixed owner, copying the finished book into the output folder succeeded but replaying its timestamps and mode then failed with `[Errno 1] Operation not permitted` when `PUID` differed from that owner, so the source was renamed `.failed` next to a perfectly good output. The move now copies content only.
