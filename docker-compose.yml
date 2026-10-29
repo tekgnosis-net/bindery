@@ -1,6 +1,6 @@
 services:
   bindery:
-    image: dinkeyes/bindery:latest
+    image: ghcr.io/tekgnosis-net/bindery:latest
     container_name: bindery
     ports:
       - "5000:5000"

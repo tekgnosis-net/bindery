@@ -69,7 +69,7 @@ All folders are created automatically on first run. Books keep their subfolder s
 ```yaml
 services:
   bindery:
-    image: dinkeyes/bindery:latest
+    image: ghcr.io/tekgnosis-net/bindery:latest
     container_name: bindery
     ports:
       - "5000:5000"
