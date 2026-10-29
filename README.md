@@ -176,7 +176,7 @@ How it fits the pipeline:
 | Title Page | Always | Never, Always, or Only when split. |
 | JPEG Quality | `85` | 1 to 100. |
 | Double Pages | Split | Split, Split and rotate, or Rotate. |
-| Grayscale | on | Untick for colour devices. |
+| Grayscale | off | Off keeps colour, matching KCC's Force Colour default. Tick for smaller files on a black-and-white reader. |
 | Crop Margins | on | Trims blank borders. |
 | Auto Contrast | off | |
 | Workers | `0` | 0 to 32; 0 uses one per CPU core. |

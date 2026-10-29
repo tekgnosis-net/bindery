@@ -51,7 +51,8 @@ DEFAULT_CONFIG: ConfigDict = {
     'gcc_quality':           '85',
     'gcc_limitmb':           '200',
     'gcc_workers':           '0',
-    'gcc_grayscale':         True,
+    # Off to match KCC's Force Colour default; colour readers lose nothing.
+    'gcc_grayscale':         False,
     'gcc_crop':              True,
     'gcc_autocontrast':      False,
     'gcc_doublepagemode':    '0',

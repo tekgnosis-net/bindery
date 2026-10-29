@@ -651,7 +651,7 @@ def _build_gcc_cmd(config: ConfigDict, filepath: str, temp_out: str) -> list[str
         '-limitmb',        str(limit),
         '-doublepagemode', dpm,
         '-titlepage',      tpage,
-        '-grayscale=' + ('1' if config.get('gcc_grayscale', True) else '0'),
+        '-grayscale=' + ('1' if config.get('gcc_grayscale') else '0'),
         '-crop=' + ('1' if config.get('gcc_crop', True) else '0'),
         '-strip=' + ('1' if config.get('gcc_strip', True) else '0'),
     ]

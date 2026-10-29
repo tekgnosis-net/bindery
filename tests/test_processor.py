@@ -1535,7 +1535,8 @@ def test_build_gcc_cmd_basic(tmp_path):
     assert cmd[cmd.index('-quality') + 1] == '85'
     assert cmd[cmd.index('-limitmb') + 1] == '200'
     assert cmd[cmd.index('-mode') + 1] == '0'
-    assert '-grayscale=1' in cmd and '-crop=1' in cmd and '-strip=1' in cmd
+    # Colour by default, like KCC's Force Colour.
+    assert '-grayscale=0' in cmd and '-crop=1' in cmd and '-strip=1' in cmd
     assert '-autocontrast' not in cmd
     assert '-workers' not in cmd          # 0 = gcc's own per-CPU default
     assert '-title=Batman 01' in cmd
@@ -1544,7 +1545,7 @@ def test_build_gcc_cmd_basic(tmp_path):
 
 
 @pytest.mark.parametrize('key, value, flag', [
-    ('gcc_grayscale',    False, '-grayscale=0'),
+    ('gcc_grayscale',    True,  '-grayscale=1'),
     ('gcc_crop',         False, '-crop=0'),
     ('gcc_strip',        False, '-strip=0'),
     ('gcc_autocontrast', True,  '-autocontrast'),
