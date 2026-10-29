@@ -15,7 +15,7 @@ A self-hosted, Dockerized converter that automatically processes e-books and com
 
 **For Kobo users:** Converts `.epub` files to Kobo's native `.kepub` format using [kepubify](https://github.com/pgaskin/kepubify), giving you better performance and reading features than sideloaded EPUBs. DRM-free Kindle books (`.kfx`, `.azw3`, `.mobi`) can optionally be converted too, via [boko](https://github.com/zacharydenton/boko).
 
-**For all devices:** Converts comic archives and PDFs (`.cbz`, `.cbr`, `.zip`, `.rar`, `.pdf`) into device-optimised files using [Kindle Comic Converter (KCC)](https://github.com/ciromattia/kcc), with full control over profile, cropping, splitting, gamma, and more.
+**For all devices:** Converts comic archives and PDFs (`.cbz`, `.cbr`, `.zip`, `.rar`, `.pdf`) into device-optimised files using [Kindle Comic Converter (KCC)](https://github.com/ciromattia/kcc), with full control over profile, cropping, splitting, gamma, and more. [go-comic-converter](https://github.com/celogeek/go-comic-converter) is available as an alternative comic engine, with kepubify adding the Kobo markup afterwards.
 
 All settings are configurable at runtime via a WebUI on port 5000, no container rebuild needed; the interface has light and dark themes that follow your system, with a header toggle to override. Supports `PUID`/`PGID` permission mapping for NAS and multi-user environments, and the image is multi-arch: it runs on x86 and ARM64, so a Raspberry Pi 4/5 or an ARM NAS works too.
 
@@ -129,13 +129,13 @@ Full URL formats for every supported service are in the [Apprise docs](https://g
 
 ## Device Profiles
 
-One Bindery can serve every reader in the house. Create a profile in the WebUI (the pills at the top of the KCC settings card), name it after the device (`kobo`, `kindle`, whatever you like), and Bindery creates `Comics_in/<name>` and `Comics_out/<name>` for it. Anything dropped into a profile's folder converts with that profile's KCC settings and comes out in its own output folder, so nothing gets mixed together.
+One Bindery can serve every reader in the house. Create a profile in the WebUI (the pills at the top of the Comics settings card), name it after the device (`kobo`, `kindle`, whatever you like), and Bindery creates `Comics_in/<name>` and `Comics_out/<name>` for it. Anything dropped into a profile's folder converts with that profile's comic settings and comes out in its own output folder, so nothing gets mixed together.
 
 A few rules that keep it predictable:
 
 - Drops in the root of `Comics_in` always use the main settings: creating profiles changes nothing for anyone who ignores them.
 - A profile starts as a copy of the main settings; switch to its pill, adjust, and save. Settings a profile has never saved follow the main settings automatically.
-- Watcher mode, notifications, the Originals setting, and the other Bindery settings are shared: profiles override KCC conversion settings only. Books have no KCC settings, so `Books_in` is unaffected.
+- Watcher mode, notifications, the Originals setting, the comic engine choice, and the other Bindery settings are shared: profiles override the KCC and go-comic-converter conversion settings only. Books have no comic settings, so `Books_in` is unaffected.
 - Deleting a profile never touches its folders or files; future drops there simply convert with the main settings.
 - Folder jobs and Bundle Chapter Folders work inside profile folders exactly as they do in the root.
 
@@ -152,6 +152,37 @@ All KCC settings are configured in the WebUI, and each option includes a descrip
 - **Splitter**: controls how landscape pages are split. Use `Right then left` for manga.
 
 When **Device Profile** is set to **Generic / Custom**, width and height fields appear for custom resolutions.
+
+---
+
+## Comic Engine: go-comic-converter
+
+The **Engine** selector at the top of the Comics card switches every comic conversion from KCC to [go-comic-converter](https://github.com/celogeek/go-comic-converter). It accepts the same inputs (`.cbz`, `.cbr`, `.zip`, `.rar`, `.pdf`, image folders, and bundled chapter folders) and is a single fast Go binary with its own cropping, double-page and splitting logic. Some libraries simply come out better in one engine than the other, so the switch is there to try.
+
+How it fits the pipeline:
+
+- go-comic-converter writes a plain EPUB. Bindery then runs [kepubify](https://github.com/pgaskin/kepubify) over it, so the output is a `.kepub` exactly like KCC's and lands in the same place with the same name. Tick **No KEPUB Extension** (under the KCC settings) to skip kepubify and keep the plain `.epub` instead.
+- Books over **Split Output At** megabytes are split into `Title - Part 01 of N.kepub` files, all of which land in the output folder. 0 never splits; go-comic-converter refuses values between 1 and 19, so those snap to 20.
+- The engine choice is global. Device profiles carry their own go-comic-converter settings (profile, mode, quality, and so on) just as they carry KCC settings, but every profile uses the engine selected on the Main tab.
+- One comic converts at a time regardless of engine, so switching does not change how much memory a busy `Comics_in` needs. **Workers** sets how many images one conversion processes in parallel; 0 means one per CPU core, and a small NAS may prefer 2 or 4.
+- The Kobo, Kindle, reMarkable and Apple Books profile codes are go-comic-converter's own and differ from KCC's, so pick the device again when you switch engines.
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| Engine | `kcc` | `kcc` or `gcc` (go-comic-converter + kepubify). Applies to all comics and all profiles. |
+| Device Profile | `KoLC` | go-comic-converter's device code. |
+| Reading Mode | Comic | Comic (left to right), Manga (right to left) or Webtoon. |
+| Split Output At | `200` MB | 0 never splits; otherwise 20 to 2000. |
+| Title Page | Always | Never, Always, or Only when split. |
+| JPEG Quality | `85` | 1 to 100. |
+| Double Pages | Split | Split, Split and rotate, or Rotate. |
+| Grayscale | on | Untick for colour devices. |
+| Crop Margins | on | Trims blank borders. |
+| Auto Contrast | off | |
+| Workers | `0` | 0 to 32; 0 uses one per CPU core. |
+| Use Filename as Title | on | EPUB title from the file or folder name. |
+| Strip Top Folder from Contents | on | Drops a single wrapper folder from the table of contents. |
+| Author | *(blank)* | Blank uses go-comic-converter's default. |
 
 ---
 

@@ -403,3 +403,63 @@ def test_index_renders_format_priority_field(client, tmp_path):
     assert 'name="book_format_priority"' in html
     assert 'value="kfx, epub"' in html
     assert 'id="book_boko_enabled"' in html
+
+
+# ── go-comic-converter engine ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize('field, bad, expected', [
+    ('comic_engine',       'calibre', 'kcc'),
+    ('comic_engine',       'gcc',     'gcc'),     # valid, passes through
+    ('gcc_profile',        'KPW34',   'KoLC'),    # KCC-only code
+    ('gcc_profile',        'KoCBW',   'KoCBW'),
+    ('gcc_mode',           '9',       '0'),
+    ('gcc_doublepagemode', 'x',       '0'),
+    ('gcc_titlepage',      '5',       '1'),
+    ('gcc_quality',        '150',     '100'),
+    ('gcc_quality',        '0',       '1'),
+    ('gcc_quality',        'best',    '85'),
+    ('gcc_limitmb',        '7',       '20'),      # gcc rejects 1-19
+    ('gcc_limitmb',        '0',       '0'),
+    ('gcc_limitmb',        '50000',   '2000'),
+    ('gcc_workers',        '99',      '32'),
+    ('gcc_workers',        '-3',      '0'),
+])
+def test_validate_post_clamps_gcc_field(client, tmp_path, field, bad, expected):
+    saved, _ = _post(client, tmp_path, **{field: bad})
+    assert saved[field] == expected
+
+
+def test_post_gcc_checkboxes_round_trip(client, tmp_path):
+    saved, _ = _post(client, tmp_path, gcc_grayscale='on', gcc_autocontrast='on')
+    assert saved['gcc_grayscale'] is True
+    assert saved['gcc_autocontrast'] is True
+    # Unticked boxes are absent from the form and must save as False.
+    assert saved['gcc_crop'] is False
+    assert saved['gcc_strip'] is False
+
+
+def test_gcc_author_is_stripped_and_capped(client, tmp_path):
+    saved, _ = _post(client, tmp_path, gcc_author='  ' + 'a' * 300 + '  ')
+    assert saved['gcc_author'] == 'a' * 200
+
+
+def test_index_get_shows_engine_controls(client):
+    resp = client.get('/')
+    assert b'name="comic_engine"' in resp.data
+    assert b'name="gcc_profile"' in resp.data
+    assert b'value="KoCBW"' in resp.data
+
+
+def test_profile_save_captures_gcc_keys_but_not_engine(client, tmp_path):
+    """gcc_ settings are per profile like kcc_ ones; the engine is global."""
+    config_file = tmp_path / 'settings.json'
+    config_file.write_text(json.dumps({**DEFAULT_CONFIG, 'profiles': {'kobo': {}}}))
+    with patch.object(cfg, 'CONFIG_FILE', str(config_file)), \
+         patch.object(cfg, 'CONFIG_DIR', str(tmp_path)):
+        resp = client.post('/', data={**_BASE_FORM, 'editing_profile': 'kobo',
+                                      'comic_engine': 'gcc', 'gcc_profile': 'KoS'})
+    assert resp.status_code == 200
+    saved = json.loads(config_file.read_text())
+    assert saved['profiles']['kobo']['gcc_profile'] == 'KoS'
+    assert 'comic_engine' not in saved['profiles']['kobo']
+    assert saved['comic_engine'] == 'gcc'

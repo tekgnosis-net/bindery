@@ -1514,3 +1514,243 @@ def test_process_file_skips_when_better_format_arrives_during_wait(tmp_path):
     assert sorted(os.listdir(books_in)) == ['Dune.epub', 'Dune.mobi']
     assert processor.JOB_REGISTRY == {}
     assert any('SKIP (superseded by Dune.epub)' in line for line in logged)
+
+
+# ── go-comic-converter engine ─────────────────────────────────────────────────
+
+def _gcc_config(**overrides):
+    config = dict(DEFAULT_CONFIG)
+    config['comic_engine'] = 'gcc'
+    config.update(overrides)
+    return config
+
+
+def test_build_gcc_cmd_basic(tmp_path):
+    cmd = processor._build_gcc_cmd(_gcc_config(), str(tmp_path / 'Batman 01.cbz'), '/tmp/out')
+    assert cmd[0] == 'go-comic-converter'
+    # Saved YAML defaults under $HOME must never leak into a conversion.
+    assert '-ignore-config' in cmd
+    assert '-quiet' in cmd
+    assert cmd[cmd.index('-profile') + 1] == 'KoLC'
+    assert cmd[cmd.index('-quality') + 1] == '85'
+    assert cmd[cmd.index('-limitmb') + 1] == '200'
+    assert cmd[cmd.index('-mode') + 1] == '0'
+    assert '-grayscale=1' in cmd and '-crop=1' in cmd and '-strip=1' in cmd
+    assert '-autocontrast' not in cmd
+    assert '-workers' not in cmd          # 0 = gcc's own per-CPU default
+    assert '-title=Batman 01' in cmd
+    assert cmd[cmd.index('-output') + 1] == '/tmp/out'
+    assert cmd[-2:] == ['-input', str(tmp_path / 'Batman 01.cbz')]
+
+
+@pytest.mark.parametrize('key, value, flag', [
+    ('gcc_grayscale',    False, '-grayscale=0'),
+    ('gcc_crop',         False, '-crop=0'),
+    ('gcc_strip',        False, '-strip=0'),
+    ('gcc_autocontrast', True,  '-autocontrast'),
+])
+def test_build_gcc_cmd_flag_mappings(tmp_path, key, value, flag):
+    cmd = processor._build_gcc_cmd(_gcc_config(**{key: value}), str(tmp_path / 'a.cbz'), '/tmp/out')
+    assert flag in cmd
+
+
+def test_build_gcc_cmd_workers_and_mode(tmp_path):
+    cmd = processor._build_gcc_cmd(_gcc_config(gcc_workers='4', gcc_mode='1',
+                                               gcc_doublepagemode='2', gcc_titlepage='2'),
+                                   str(tmp_path / 'a.cbz'), '/tmp/out')
+    assert cmd[cmd.index('-workers') + 1] == '4'
+    assert cmd[cmd.index('-mode') + 1] == '1'
+    assert cmd[cmd.index('-doublepagemode') + 1] == '2'
+    assert cmd[cmd.index('-titlepage') + 1] == '2'
+
+
+@pytest.mark.parametrize('key, bad, expected', [
+    # settings.json bypasses _validate_post, so the builder re-clamps.
+    ('gcc_quality',  '500',    '100'),
+    ('gcc_quality',  'high',   '85'),
+    ('gcc_limitmb',  '5',      '20'),     # gcc rejects 1-19 MB
+    ('gcc_limitmb',  '0',      '0'),      # unlimited stays unlimited
+    ('gcc_limitmb',  '99999',  '2000'),
+    ('gcc_profile',  'KPW34',  'KoLC'),   # a KCC-only code, not a gcc one
+    ('gcc_mode',     '7',      '0'),
+])
+def test_build_gcc_cmd_reclamps_hand_edited_values(tmp_path, key, bad, expected):
+    cmd = processor._build_gcc_cmd(_gcc_config(**{key: bad}), str(tmp_path / 'a.cbz'), '/tmp/out')
+    flag = '-' + key[len('gcc_'):]
+    assert cmd[cmd.index(flag) + 1] == expected
+
+
+def test_build_gcc_cmd_dash_leading_title_and_author_stay_values(tmp_path):
+    cmd = processor._build_gcc_cmd(_gcc_config(gcc_author='--evil'),
+                                   str(tmp_path / '-weird.cbz'), '/tmp/out')
+    assert '-title=-weird' in cmd
+    assert '-author=--evil' in cmd
+    assert '--evil' not in cmd
+
+
+def test_build_gcc_cmd_metadatatitle_off_omits_title(tmp_path):
+    cmd = processor._build_gcc_cmd(_gcc_config(gcc_metadatatitle=False),
+                                   str(tmp_path / 'a.cbz'), '/tmp/out')
+    assert not any(a.startswith('-title=') for a in cmd)
+
+
+def _fake_gcc_then_kepubify(calls, parts=('Comic.epub',)):
+    """Stand in for both binaries: gcc writes EPUBs into its -output dir and
+    kepubify turns everything in its input dir into .kepub in --output."""
+    def fake_run(cmd, short, timeout=None):
+        calls.append(cmd)
+        if cmd[0] == 'go-comic-converter':
+            out = cmd[cmd.index('-output') + 1]
+            os.makedirs(out, exist_ok=True)
+            for name in parts:
+                with open(os.path.join(out, name), 'wb') as f:
+                    f.write(b'e' * 30)
+        elif cmd[0] == 'kepubify':
+            src = cmd[-1]
+            out = cmd[cmd.index('--output') + 1]
+            os.makedirs(out, exist_ok=True)
+            for name in os.listdir(src):
+                with open(os.path.join(out, name[:-len('.epub')] + '.kepub'), 'wb') as f:
+                    f.write(b'k' * 20)
+        else:
+            raise AssertionError(f'unexpected binary {cmd[0]}')
+    return fake_run
+
+
+def _comic_patches(tmp_path, config):
+    return [
+        patch.object(processor, 'COMICS_IN', str(tmp_path / 'comics_in')),
+        patch.object(processor, 'COMICS_OUT', str(tmp_path / 'comics_out')),
+        patch.object(processor, 'JOBS_FILE', str(tmp_path / 'jobs.json')),
+        patch.object(processor, 'STATS_FILE', str(tmp_path / 'stats.json')),
+        patch('processor.load_config', return_value=config),
+        patch('processor.wait_for_file_ready', return_value=True),
+        patch('processor._is_dir_stable', return_value=True),
+        patch('processor._gcc_available', return_value=True),
+    ]
+
+
+def test_process_file_gcc_runs_gcc_then_kepubify(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    calls = []
+
+    with patch('processor._run_conversion', side_effect=_fake_gcc_then_kepubify(calls)):
+        with _nest(_comic_patches(tmp_path, _gcc_config())):
+            processor.process_file(str(src), 'comic')
+
+    assert [c[0] for c in calls] == ['go-comic-converter', 'kepubify']
+    gcc_out = calls[0][calls[0].index('-output') + 1]
+    # kepubify is handed gcc's whole directory, so split parts ride along.
+    assert calls[1][-1] == gcc_out
+    assert '--calibre' in calls[1]
+    assert os.listdir(tmp_path / 'comics_out') == ['Comic.kepub']
+    assert not src.exists()
+    job = list(processor.JOB_REGISTRY.values())[0]
+    assert job['state'] == 'success'
+
+
+def test_process_file_gcc_split_parts_all_land(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    calls = []
+    parts = ('Comic - Part 01 of 02.epub', 'Comic - Part 02 of 02.epub')
+
+    with patch('processor._run_conversion', side_effect=_fake_gcc_then_kepubify(calls, parts)):
+        with _nest(_comic_patches(tmp_path, _gcc_config())):
+            processor.process_file(str(src), 'comic')
+
+    assert sorted(os.listdir(tmp_path / 'comics_out')) == \
+        ['Comic - Part 01 of 02.kepub', 'Comic - Part 02 of 02.kepub']
+
+
+def test_process_file_gcc_nokepub_skips_kepubify(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    calls = []
+
+    with patch('processor._run_conversion', side_effect=_fake_gcc_then_kepubify(calls)):
+        with _nest(_comic_patches(tmp_path, _gcc_config(kcc_nokepub=True))):
+            processor.process_file(str(src), 'comic')
+
+    assert [c[0] for c in calls] == ['go-comic-converter']
+    assert os.listdir(tmp_path / 'comics_out') == ['Comic.epub']
+
+
+def test_process_file_gcc_missing_binary_fails_job(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+
+    with patch('processor._run_conversion') as run:
+        with _nest(_comic_patches(tmp_path, _gcc_config())):
+            with patch('processor._gcc_available', return_value=False):
+                processor.process_file(str(src), 'comic')
+
+    run.assert_not_called()
+    assert (comics_in / 'Comic.cbz.failed').exists()
+    job = list(processor.JOB_REGISTRY.values())[0]
+    assert job['state'] == 'failed'
+    assert 'go-comic-converter' in job['error']
+
+
+def test_process_file_kcc_engine_unchanged(tmp_path):
+    """The default engine still calls kcc-c2e alone, once."""
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    calls = []
+
+    def fake_run(cmd, short, timeout=None):
+        calls.append(cmd)
+        out = cmd[cmd.index('--output') + 1]
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, 'Comic.kepub.epub'), 'wb') as f:
+            f.write(b'k' * 20)
+
+    with patch('processor._run_conversion', side_effect=fake_run):
+        with _nest(_comic_patches(tmp_path, dict(DEFAULT_CONFIG))):
+            processor.process_file(str(src), 'comic')
+
+    assert [c[0] for c in calls] == ['kcc-c2e']
+    assert os.listdir(tmp_path / 'comics_out') == ['Comic.kepub']
+
+
+def test_process_folder_gcc_runs_gcc_then_kepubify(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    folder    = comics_in / 'Batman'
+    folder.mkdir(parents=True)
+    (folder / 'p1.jpg').write_bytes(b'x')
+    calls = []
+
+    with patch('processor._run_conversion', side_effect=_fake_gcc_then_kepubify(calls, ('Batman.epub',))):
+        with _nest(_comic_patches(tmp_path, _gcc_config())):
+            processor.process_folder(str(folder))
+
+    assert [c[0] for c in calls] == ['go-comic-converter', 'kepubify']
+    assert calls[0][-1] == str(folder)
+    assert '-title=Batman' in calls[0]
+    assert os.listdir(tmp_path / 'comics_out') == ['Batman.kepub']
+    assert not folder.exists()
+
+
+class _nest:
+    """Enter a list of patchers as one context manager."""
+    def __init__(self, patchers):
+        self.patchers = patchers
+    def __enter__(self):
+        for p in self.patchers:
+            p.start()
+        return self
+    def __exit__(self, *exc):
+        for p in reversed(self.patchers):
+            p.stop()
+        return False

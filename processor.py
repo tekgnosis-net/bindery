@@ -601,6 +601,122 @@ class ConversionError(Exception):
         self.returncode = returncode
 
 
+GCC_PROFILES = frozenset((
+    # go-comic-converter v3.6.0 internal/pkg/converter/profiles.go
+    'HR', 'SR', 'KS3', 'KSC', 'KS2', 'KS', 'K12', 'KPW12', 'K11', 'KPW11',
+    'KO', 'KPW5', 'K10', 'KPW4', 'K8', 'KPW3', 'KV', 'K7', 'KPW2', 'K5',
+    'KPW', 'K4', 'KDX', 'K3', 'K2', 'K1',
+    'KoCBW', 'KoCC', 'KoLC', 'KoE2', 'KoC2E', 'KoE', 'KoS', 'KoL2', 'KoN',
+    'KoLH2O', 'KoCHD', 'KoF', 'KoAH2O2', 'KoAO', 'KoA2', 'KoGHD', 'KoT2',
+    'KoAH2O', 'KoA', 'KoAHD', 'KoM', 'KoG', 'KoT', 'KoR',
+    'RMPU', 'RMPM', 'RMP', 'RM2', 'RM1',
+    'AB', 'ABD', 'ABP11', 'ABP13', 'ABI', 'ABM',
+))
+
+
+def _int_in(value: object, lo: int, hi: int, default: int) -> int:
+    """Parse value as an int clamped to [lo, hi]; default when unparseable.
+    settings.json bypasses _validate_post, so builders re-clamp here."""
+    try:
+        return max(lo, min(hi, int(float(value))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_gcc_cmd(config: ConfigDict, filepath: str, temp_out: str) -> list[str]:
+    """Build the go-comic-converter argument list from the gcc_ settings.
+
+    -ignore-config matters: gcc persists whatever -save last wrote to a YAML
+    file under $HOME, and a container that outlives a stray manual run would
+    otherwise convert with settings the UI never showed.
+    """
+    profile = config.get('gcc_profile', 'KoLC')
+    if profile not in GCC_PROFILES:
+        profile = DEFAULT_CONFIG['gcc_profile']
+    mode   = str(config.get('gcc_mode', '0'))
+    mode   = mode if mode in ('0', '1', '2') else '0'
+    dpm    = str(config.get('gcc_doublepagemode', '0'))
+    dpm    = dpm if dpm in ('0', '1', '2') else '0'
+    tpage  = str(config.get('gcc_titlepage', '1'))
+    tpage  = tpage if tpage in ('0', '1', '2') else '1'
+    limit  = _int_in(config.get('gcc_limitmb', 200), 0, 2000, 200)
+    if 0 < limit < 20:
+        limit = 20   # gcc rejects 1-19; 0 means unlimited
+
+    cmd = [
+        'go-comic-converter', '-ignore-config', '-quiet',
+        '-profile',        profile,
+        '-mode',           mode,
+        '-quality',        str(_int_in(config.get('gcc_quality', 85), 1, 100, 85)),
+        '-limitmb',        str(limit),
+        '-doublepagemode', dpm,
+        '-titlepage',      tpage,
+        '-grayscale=' + ('1' if config.get('gcc_grayscale', True) else '0'),
+        '-crop=' + ('1' if config.get('gcc_crop', True) else '0'),
+        '-strip=' + ('1' if config.get('gcc_strip', True) else '0'),
+    ]
+    if config.get('gcc_autocontrast'):
+        cmd.append('-autocontrast')
+    workers = _int_in(config.get('gcc_workers', 0), 0, 32, 0)
+    if workers:
+        cmd.extend(['-workers', str(workers)])
+
+    # = form, so titles/authors starting with a dash don't read as options.
+    if config.get('gcc_metadatatitle', True):
+        cmd.append('-title=' + os.path.splitext(os.path.basename(filepath))[0])
+    author = (config.get('gcc_author') or '').strip()
+    if author:
+        cmd.append('-author=' + author)
+
+    cmd.extend(['-output', temp_out, '-input', filepath])
+    return cmd
+
+
+def _gcc_available() -> bool:
+    return shutil.which('go-comic-converter') is not None
+
+
+def _run_comic_engine(config: ConfigDict, src: str, temp_out: str,
+                      short: str, gcc_tmp: str, label: str | None = None) -> None:
+    """Run the configured comic engine on src, leaving finished files in temp_out.
+
+    KCC writes its (already Kobo-marked) output straight into temp_out. gcc
+    writes a plain EPUB, so kepubify runs over its directory afterwards; the
+    No KEPUB Extension toggle skips that step and ships the EPUB as is. Both
+    paths hold kcc_semaphore: gcc runs a worker per CPU and two of them
+    alongside a KCC job would exhaust memory on a small NAS just the same.
+    """
+    label = label or short
+    if config.get('comic_engine') != 'gcc':
+        cmd = _build_kcc_cmd(config, src, temp_out)
+        log(f">>> QUEUED: {label}")
+        with kcc_semaphore:
+            log(f">>> STARTING: kcc-c2e on {label}")
+            log(f">>> CMD: {' '.join(cmd)}")
+            _run_conversion(cmd, short)
+        return
+
+    # Retry can land here on an image built without the binary.
+    if not _gcc_available():
+        raise RuntimeError('go-comic-converter is not installed in this image')
+    os.makedirs(gcc_tmp, exist_ok=True)
+    epub_dir = temp_out if config.get('kcc_nokepub') else gcc_tmp
+    cmd = _build_gcc_cmd(config, src, epub_dir)
+    log(f">>> QUEUED: {label}")
+    with kcc_semaphore:
+        log(f">>> STARTING: go-comic-converter on {label}")
+        log(f">>> CMD: {' '.join(cmd)}")
+        _run_conversion(cmd, short)
+        if epub_dir is gcc_tmp:
+            # --calibre gives .kepub directly, which is the comic output
+            # extension move_output_file already normalises KCC down to.
+            # A directory input makes one call cover every split part.
+            cmd = ['kepubify', '--inplace', '--calibre', '--output', temp_out, gcc_tmp]
+            log(f">>> STARTING: kepubify on {label}")
+            log(f">>> CMD: {' '.join(cmd)}")
+            _run_conversion(cmd, short)
+
+
 def _run_conversion(cmd: list[str], short: str, timeout: int | None = None) -> None:
     """Run cmd, streaming output to the log. Raises ConversionError on non-zero exit.
 
@@ -935,6 +1051,7 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
     in_base  = BOOKS_IN if c_type == 'book' else COMICS_IN
     temp_out = os.path.join('/tmp', uuid.uuid4().hex + '_out')
     boko_tmp = os.path.join('/tmp', uuid.uuid4().hex + '_boko')
+    gcc_tmp  = os.path.join('/tmp', uuid.uuid4().hex + '_gcc')
     lock_key = filepath
 
     try:
@@ -1002,12 +1119,7 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
             _run_conversion(cmd, short)
 
         else:
-            cmd = _build_kcc_cmd(config, filepath, temp_out)
-            log(f">>> QUEUED: {short}")
-            with kcc_semaphore:
-                log(f">>> STARTING: kcc-c2e on {short}")
-                log(f">>> CMD: {' '.join(cmd)}")
-                _run_conversion(cmd, short)
+            _run_comic_engine(config, filepath, temp_out, short, gcc_tmp)
 
         produced = get_output_files(temp_out)
         if produced:
@@ -1065,6 +1177,7 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
     finally:
         shutil.rmtree(temp_out, ignore_errors=True)
         shutil.rmtree(boko_tmp, ignore_errors=True)
+        shutil.rmtree(gcc_tmp, ignore_errors=True)
         with lock_mutex:
             PROCESSING_LOCKS.discard(lock_key)
 
@@ -1078,6 +1191,7 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
     """
     short      = os.path.basename(folderpath)[:40]
     temp_out   = os.path.join('/tmp', uuid.uuid4().hex + '_out')
+    gcc_tmp    = os.path.join('/tmp', uuid.uuid4().hex + '_gcc')
     bundle_tmp = None
 
     try:
@@ -1108,13 +1222,7 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
             bundle_tmp, kcc_input = _extract_chapter_folder(folderpath)
 
         os.makedirs(temp_out, exist_ok=True)
-        cmd = _build_kcc_cmd(config, kcc_input, temp_out)
-
-        log(f">>> QUEUED (folder): {short}/")
-        with kcc_semaphore:
-            log(f">>> STARTING: kcc-c2e on {short}/")
-            log(f">>> CMD: {' '.join(cmd)}")
-            _run_conversion(cmd, short)
+        _run_comic_engine(config, kcc_input, temp_out, short, gcc_tmp, label=short + '/')
 
         rel_dir = os.path.relpath(os.path.dirname(folderpath), COMICS_IN)
         out_dir = COMICS_OUT if rel_dir in ('.', '') else os.path.join(COMICS_OUT, rel_dir)
@@ -1162,6 +1270,7 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
         _notify('failure', short + '/', msg)
     finally:
         shutil.rmtree(temp_out, ignore_errors=True)
+        shutil.rmtree(gcc_tmp, ignore_errors=True)
         if bundle_tmp:
             shutil.rmtree(bundle_tmp, ignore_errors=True)
         with lock_mutex:

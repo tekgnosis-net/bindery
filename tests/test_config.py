@@ -133,3 +133,15 @@ def test_profile_overrides_inherits_unsaved_keys():
     config['profiles'] = {'old': {'kcc_profile': 'KPW5'}}
     merged = cfg.profile_overrides(config, 'old')
     assert merged['kcc_mozjpeg'] is True
+
+
+def test_profile_overrides_merges_gcc_keys_too():
+    """The second engine's settings ride the same overlay as KCC's; the
+    engine choice itself stays global."""
+    config = dict(cfg.DEFAULT_CONFIG)
+    config['profiles'] = {'kobo': {'gcc_profile': 'KoS', 'comic_engine': 'gcc'}}
+    merged = cfg.profile_overrides(config, 'kobo')
+    assert merged['gcc_profile'] == 'KoS'
+    assert merged['comic_engine'] == 'kcc'
+    assert 'gcc_quality' in cfg.KCC_KEYS
+    assert 'comic_engine' not in cfg.KCC_KEYS

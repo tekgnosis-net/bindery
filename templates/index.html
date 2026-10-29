@@ -445,7 +445,7 @@
     <input type="hidden" name="do_restart" id="do_restart" value="">
     <input type="hidden" name="editing_profile" id="editing_profile" value="">
     <div class="card">
-        <h2>KCC — Kindle Comic Converter</h2>
+        <h2>Comics</h2>
         <div class="profile-bar" id="profile-bar">
             <button type="button" class="file-tab active" data-profile="" onclick="switchProfile('')">Main</button>
             {% for name in profiles %}
@@ -459,6 +459,17 @@
             </span>
         </div>
         <div class="profile-note" id="profile-note"></div>
+
+        <div class="field" style="max-width:420px">
+            <label class="lbl">Engine</label>
+            <select name="comic_engine" id="comic_engine">
+                <option value="kcc" {% if config.comic_engine != 'gcc' %}selected{% endif %}>KCC — Kindle Comic Converter</option>
+                <option value="gcc" {% if config.comic_engine == 'gcc' %}selected{% endif %}>go-comic-converter + kepubify</option>
+            </select>
+        </div>
+        <p class="note" id="engine_note_gcc">go-comic-converter writes a plain EPUB and kepubify adds the Kobo markup afterwards, so the output is <code>.kepub</code> like KCC's. Tick <strong>No KEPUB Extension</strong> under the KCC settings to skip kepubify and ship the EPUB as is. The engine applies to every device profile; only the settings below are per profile.</p>
+
+        <div id="engine-kcc">
         <div class="grid-3">
 
             <div>
@@ -756,6 +767,210 @@
             </div>
 
         </div>
+        </div>
+
+        <div id="engine-gcc">
+        <div class="grid-3">
+
+            <div>
+                <div class="sec">Device and Output</div>
+
+                <div class="field">
+                    <label class="lbl">Device Profile</label>
+                    <select name="gcc_profile" id="gcc_profile">
+                        <optgroup label="Kobo">
+                            {% for val, lbl in [
+                                ('KoCBW','Kobo Clara BW'),
+                                ('KoCC','Kobo Clara Colour'),
+                                ('KoLC','Kobo Libra Colour'),
+                                ('KoE2','Kobo Elipsa 2E'),
+                                ('KoC2E','Kobo Clara 2E'),
+                                ('KoE','Kobo Elipsa'),
+                                ('KoS','Kobo Sage'),
+                                ('KoL2','Kobo Libra 2'),
+                                ('KoN','Kobo Nia'),
+                                ('KoLH2O','Kobo Libra H2O'),
+                                ('KoCHD','Kobo Clara HD'),
+                                ('KoF','Kobo Forma'),
+                                ('KoAH2O2','Kobo Aura H2O Edition 2'),
+                                ('KoAO','Kobo Aura One'),
+                                ('KoA2','Kobo Aura Edition 2'),
+                                ('KoGHD','Kobo Glo HD'),
+                                ('KoT2','Kobo Touch 2.0'),
+                                ('KoAH2O','Kobo Aura H2O'),
+                                ('KoA','Kobo Aura'),
+                                ('KoAHD','Kobo Aura HD'),
+                                ('KoM','Kobo Mini'),
+                                ('KoG','Kobo Glo'),
+                                ('KoT','Kobo Touch'),
+                                ('KoR','Kobo eReader')
+                            ] %}
+                            <option value="{{ val }}" {% if config.gcc_profile == val %}selected{% endif %}>{{ lbl }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="Kindle">
+                            {% for val, lbl in [
+                                ('HR','Kindle Scribe / Colorsoft HR (2400x3840)'),
+                                ('SR','Kindle Scribe / Colorsoft SR (1200x1920)'),
+                                ('KS3','Kindle Scribe 3'),
+                                ('KSC','Kindle Scribe Colorsoft'),
+                                ('KS2','Kindle Scribe 2'),
+                                ('KS','Kindle Scribe'),
+                                ('K12','Kindle 12'),
+                                ('KPW12','Kindle Paperwhite 12'),
+                                ('K11','Kindle 11'),
+                                ('KPW11','Kindle Paperwhite 11'),
+                                ('KO','Kindle Oasis'),
+                                ('KPW5','Kindle Paperwhite 5'),
+                                ('K10','Kindle 10'),
+                                ('KPW4','Kindle Paperwhite 4'),
+                                ('K8','Kindle 8'),
+                                ('KPW3','Kindle Paperwhite 3'),
+                                ('KV','Kindle Voyage'),
+                                ('K7','Kindle 7'),
+                                ('KPW2','Kindle Paperwhite 2'),
+                                ('K5','Kindle 5'),
+                                ('KPW','Kindle Paperwhite'),
+                                ('K4','Kindle 4'),
+                                ('KDX','Kindle DX'),
+                                ('K3','Kindle 3'),
+                                ('K2','Kindle 2'),
+                                ('K1','Kindle 1')
+                            ] %}
+                            <option value="{{ val }}" {% if config.gcc_profile == val %}selected{% endif %}>{{ lbl }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="reMarkable">
+                            {% for val, lbl in [
+                                ('RMPU','reMarkable Paper Pro (upscaled)'),
+                                ('RMPM','reMarkable Paper Pro Move'),
+                                ('RMP','reMarkable Paper Pro'),
+                                ('RM2','reMarkable 2'),
+                                ('RM1','reMarkable 1')
+                            ] %}
+                            <option value="{{ val }}" {% if config.gcc_profile == val %}selected{% endif %}>{{ lbl }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="Apple Books">
+                            {% for val, lbl in [
+                                ('AB','Apple Books'),
+                                ('ABD','Apple Books (iPad)'),
+                                ('ABP11','Apple Books (iPad Pro 11)'),
+                                ('ABP13','Apple Books (iPad Pro 13)'),
+                                ('ABI','Apple Books (iPhone)'),
+                                ('ABM','Apple Books (Mac)')
+                            ] %}
+                            <option value="{{ val }}" {% if config.gcc_profile == val %}selected{% endif %}>{{ lbl }}</option>
+                            {% endfor %}
+                        </optgroup>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label class="lbl">Reading Mode</label>
+                    <select name="gcc_mode">
+                        <option value="0" {% if config.gcc_mode != '1' and config.gcc_mode != '2' %}selected{% endif %}>Comic (left to right)</option>
+                        <option value="1" {% if config.gcc_mode == '1' %}selected{% endif %}>Manga (right to left)</option>
+                        <option value="2" {% if config.gcc_mode == '2' %}selected{% endif %}>Webtoon</option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label class="lbl">Split Output At (MB)</label>
+                    <input type="number" name="gcc_limitmb" min="0" max="2000"
+                           value="{{ config.gcc_limitmb }}">
+                </div>
+                <p class="note">Books over this size are split into <code>Title - Part 01 of N</code> files. Minimum 20; 0 never splits.</p>
+
+                <div class="field">
+                    <label class="lbl">Title Page</label>
+                    <select name="gcc_titlepage">
+                        <option value="0" {% if config.gcc_titlepage == '0' %}selected{% endif %}>Never</option>
+                        <option value="1" {% if config.gcc_titlepage != '0' and config.gcc_titlepage != '2' %}selected{% endif %}>Always</option>
+                        <option value="2" {% if config.gcc_titlepage == '2' %}selected{% endif %}>Only when split</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <div class="sec">Image Processing</div>
+
+                <div class="field">
+                    <label class="lbl">JPEG Quality</label>
+                    <input type="number" name="gcc_quality" min="1" max="100"
+                           value="{{ config.gcc_quality }}">
+                </div>
+
+                <div class="field">
+                    <label class="lbl">Double Pages</label>
+                    <select name="gcc_doublepagemode">
+                        <option value="0" {% if config.gcc_doublepagemode != '1' and config.gcc_doublepagemode != '2' %}selected{% endif %}>Split</option>
+                        <option value="1" {% if config.gcc_doublepagemode == '1' %}selected{% endif %}>Split and rotate</option>
+                        <option value="2" {% if config.gcc_doublepagemode == '2' %}selected{% endif %}>Rotate</option>
+                    </select>
+                </div>
+
+                <div class="checks checks-spaced">
+                    <label class="check">
+                        <input type="checkbox" name="gcc_grayscale" {% if config.gcc_grayscale %}checked{% endif %}>
+                        <span>
+                            <div class="check-label">Grayscale</div>
+                            <div class="check-hint">Smaller files, ideal for e-ink. Untick for colour readers.</div>
+                        </span>
+                    </label>
+                    <label class="check">
+                        <input type="checkbox" name="gcc_crop" {% if config.gcc_crop %}checked{% endif %}>
+                        <span>
+                            <div class="check-label">Crop Margins</div>
+                            <div class="check-hint">Trim blank borders around each page</div>
+                        </span>
+                    </label>
+                    <label class="check">
+                        <input type="checkbox" name="gcc_autocontrast" {% if config.gcc_autocontrast %}checked{% endif %}>
+                        <span>
+                            <div class="check-label">Auto Contrast</div>
+                            <div class="check-hint">Improve contrast automatically</div>
+                        </span>
+                    </label>
+                </div>
+
+                <div class="field">
+                    <label class="lbl">Workers</label>
+                    <input type="number" name="gcc_workers" min="0" max="32"
+                           value="{{ config.gcc_workers }}">
+                </div>
+                <p class="note">Parallel image workers for one conversion. 0 uses one per CPU core; lower it on a small NAS.</p>
+            </div>
+
+            <div>
+                <div class="sec">Output Metadata</div>
+                <div class="checks checks-spaced">
+                    <label class="check">
+                        <input type="checkbox" name="gcc_metadatatitle" {% if config.gcc_metadatatitle %}checked{% endif %}>
+                        <span>
+                            <div class="check-label">Use Filename as Title</div>
+                            <div class="check-hint">Sets EPUB metadata title from the source filename or folder name</div>
+                        </span>
+                    </label>
+                    <label class="check">
+                        <input type="checkbox" name="gcc_strip" {% if config.gcc_strip %}checked{% endif %}>
+                        <span>
+                            <div class="check-label">Strip Top Folder from Contents</div>
+                            <div class="check-hint">Drops the wrapper folder from the table of contents when there is only one</div>
+                        </span>
+                    </label>
+                </div>
+
+                <div class="field">
+                    <label class="lbl">Author</label>
+                    <input type="text" name="gcc_author" maxlength="200"
+                           placeholder="Leave blank for go-comic-converter's default"
+                           value="{{ config.gcc_author }}">
+                </div>
+            </div>
+
+        </div>
+        </div>
 
     </div>
 
@@ -1000,6 +1215,16 @@
     document.getElementById('kcc_profile').addEventListener('change', toggleCustomFields);
     toggleCustomFields();
 
+    /* ── Comic engine: one engine's controls at a time ── */
+    function toggleEngineFields() {
+        var gcc = document.getElementById('comic_engine').value === 'gcc';
+        document.getElementById('engine-kcc').style.display      = gcc ? 'none' : '';
+        document.getElementById('engine-gcc').style.display      = gcc ? '' : 'none';
+        document.getElementById('engine_note_gcc').style.display = gcc ? '' : 'none';
+    }
+    document.getElementById('comic_engine').addEventListener('change', toggleEngineFields);
+    toggleEngineFields();
+
     /* ── Format priority only matters once Kindle formats are books ── */
     function togglePriorityFields() {
         var display = document.getElementById('book_boko_enabled').checked ? '' : 'none';
@@ -1183,7 +1408,7 @@
                 '</code> convert with these settings. Books and everything else keep the Main settings. ' +
                 '<button type="button" class="prof-del" onclick="askDeleteProfile()">Delete profile</button>';
         } else if (names.length) {
-            note.textContent = 'Drops in Comics_in convert with these settings. Profiles override the KCC settings for their own folder; Books_in has its own card.';
+            note.textContent = 'Drops in Comics_in convert with these settings. Profiles override the comic settings for their own folder; Books_in has its own card.';
         } else {
             note.textContent = '';
         }

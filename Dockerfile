@@ -1,3 +1,11 @@
+# go-comic-converter ships no release binaries, so it is built here. The
+# default cgo build bundles a static MuPDF for PDF input, which keeps the
+# runtime image free of a libmupdf package.
+FROM golang:1.27-bookworm AS gcc-build
+ENV CGO_ENABLED=1 GOFLAGS=-trimpath
+RUN go install github.com/celogeek/go-comic-converter/v3@v3.6.0 \
+ && mv /go/bin/go-comic-converter /go-comic-converter
+
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
@@ -51,6 +59,9 @@ RUN set -eux; \
     rm /tmp/boko.tar.xz; \
     chmod +x /usr/local/bin/boko; \
     boko --version
+
+COPY --from=gcc-build /go-comic-converter /usr/local/bin/go-comic-converter
+RUN go-comic-converter -ignore-config -help >/dev/null
 
 RUN ln -sf /usr/bin/7z /usr/local/bin/7za \
  && ln -sf /usr/bin/7z /usr/local/bin/7zr || true

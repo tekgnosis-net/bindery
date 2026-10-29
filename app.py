@@ -11,7 +11,7 @@ from flask import Flask, jsonify, request, render_template, send_file
 
 from config import DEFAULT_CONFIG, KCC_KEYS, load_config, save_config, ConfigDict
 from processor import (
-    LOG_BUFFER, log_lock, log, watch_loop, inotify_watch_loop,
+    LOG_BUFFER, log_lock, log, watch_loop, inotify_watch_loop, GCC_PROFILES,
     _load_log_history, _load_job_registry, _load_converted_ledger, _load_stats, _collision_free,
     JOB_REGISTRY, job_registry_lock, retry_file, STATS, stats_lock,
     COMIC_EXTS, book_exts, normalize_book_format_priority,
@@ -73,6 +73,28 @@ def _validate_post(config: ConfigDict) -> ConfigDict:
 
     if config.get('watcher_mode') not in ('poll', 'inotify'):
         config['watcher_mode'] = 'poll'
+
+    # go-comic-converter
+    if config.get('comic_engine') not in ('kcc', 'gcc'):
+        config['comic_engine'] = 'kcc'
+    if config.get('gcc_profile') not in GCC_PROFILES:
+        config['gcc_profile'] = DEFAULT_CONFIG['gcc_profile']
+    for key, valid, default in (('gcc_mode', ('0', '1', '2'), '0'),
+                                ('gcc_doublepagemode', ('0', '1', '2'), '0'),
+                                ('gcc_titlepage', ('0', '1', '2'), '1')):
+        if str(config.get(key)) not in valid:
+            config[key] = default
+    for key, lo, hi, default in (('gcc_quality', 1, 100, 85),
+                                 ('gcc_limitmb', 0, 2000, 200),
+                                 ('gcc_workers', 0, 32, 0)):
+        try:
+            config[key] = str(max(lo, min(hi, int(float(config.get(key, default))))))
+        except (ValueError, TypeError):
+            config[key] = str(default)
+    # gcc rejects 1 to 19 MB outright; 0 means unlimited and stays.
+    if 0 < int(config['gcc_limitmb']) < 20:
+        config['gcc_limitmb'] = '20'
+    config['gcc_author'] = (config.get('gcc_author') or '').strip()[:200]
 
     if config.get('originals') not in ('delete', 'archive', 'keep'):
         config['originals'] = 'delete'
@@ -306,7 +328,10 @@ def create_app(start_threads: bool = True) -> Flask:
                         'kcc_borders', 'kcc_author', 'kcc_customwidth', 'kcc_customheight',
                         'book_extension', 'book_hyphenate', 'book_dummy_titlepage',
                         'book_css', 'book_replace', 'book_charset',
-                        'book_format_priority'):
+                        'book_format_priority',
+                        'comic_engine', 'gcc_profile', 'gcc_mode', 'gcc_quality',
+                        'gcc_limitmb', 'gcc_workers', 'gcc_doublepagemode',
+                        'gcc_titlepage', 'gcc_author'):
                 config[key] = request.form.get(key, DEFAULT_CONFIG.get(key, ''))
             for key in ('kcc_manga_style', 'kcc_hq', 'kcc_two_panel', 'kcc_webtoon',
                         'kcc_forcecolor', 'kcc_colorautocontrast', 'kcc_colorcurve',
@@ -316,6 +341,8 @@ def create_app(start_threads: bool = True) -> Flask:
                         'notify_on_success', 'notify_on_failure',
                         'book_smarten_punctuation', 'book_fullscreen_fixes',
                         'book_boko_enabled',
+                        'gcc_grayscale', 'gcc_crop', 'gcc_autocontrast',
+                        'gcc_strip', 'gcc_metadatatitle',
                         'bundle_chapter_folders'):
                 config[key] = key in request.form
             config['file_wait_timeout'] = request.form.get(

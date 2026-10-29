@@ -39,6 +39,26 @@ DEFAULT_CONFIG: ConfigDict = {
     'kcc_batchsplit':        '0',
     'kcc_customwidth':       '',
     'kcc_customheight':      '',
+    # Comic engine. 'kcc' keeps the pipeline exactly as it always was; 'gcc'
+    # runs go-comic-converter to a plain EPUB and kepubify after it. Global
+    # rather than per-profile: both engines share one serialising semaphore
+    # and the UI shows one engine's controls at a time.
+    'comic_engine':          'kcc',
+    # go-comic-converter. gcc_-prefixed so the device-profile overlay picks
+    # these up the same way it does kcc_ keys.
+    'gcc_profile':           'KoLC',
+    'gcc_mode':              '0',
+    'gcc_quality':           '85',
+    'gcc_limitmb':           '200',
+    'gcc_workers':           '0',
+    'gcc_grayscale':         True,
+    'gcc_crop':              True,
+    'gcc_autocontrast':      False,
+    'gcc_doublepagemode':    '0',
+    'gcc_strip':             True,
+    'gcc_titlepage':         '1',
+    'gcc_metadatatitle':     True,
+    'gcc_author':            '',
     # Books (kepubify). Deliberately not kcc_-prefixed: KCC_KEYS is derived from
     # that prefix, so a kcc_ name here would make books device-profile
     # overridable, and Books_in has no profiles.
@@ -68,8 +88,9 @@ DEFAULT_CONFIG: ConfigDict = {
 }
 
 # Keys a device profile overrides. Everything else — watcher, notifications,
-# folder handling — is shared across profiles.
-KCC_KEYS = frozenset(k for k in DEFAULT_CONFIG if k.startswith('kcc_'))
+# folder handling, the engine choice — is shared across profiles. The name
+# predates the second engine; it covers both converters' settings.
+KCC_KEYS = frozenset(k for k in DEFAULT_CONFIG if k.startswith(('kcc_', 'gcc_')))
 
 _config_lock = threading.Lock()
 
