@@ -8,6 +8,7 @@
 - **Format priority for books**: when a folder holds the same book in several formats, such as `Dune.epub`, `Dune.azw3` and `Dune.mobi`, only one converts instead of producing `Dune.kepub`, `Dune_2.kepub` and `Dune_3.kepub`. The new **Format Priority** setting picks which (default `epub, azw3, kfx, mobi`); the other formats are deleted once it succeeds, and if it fails the next format converts instead. Blank converts every format as before. Only relevant with **Convert Kindle Formats** on.
 - **Output extension for books**: choose `.kepub` (the default, and what Calibre and Calibre-Web-Automated expect), `.kepub.epub` (what a Kobo recognises when you copy books to it over USB), or plain `.epub`.
 
+- **Tool tags on log lines**: conversion log lines now name the tool in brackets, `[kcc]`, `[gcc]`, `[kepubify]` or `[boko]`, and the closing `SUCCESS` or `FAILED` line names the chain that ran, such as `[gcc+kepubify] SUCCESS`. Streamed converter output is prefixed `[gcc Title.cbz]` instead of just the title, so a go-comic-converter pass and the kepubify pass after it are told apart.
 - **Timestamps on log lines**: every activity log line now starts with the date and time in the container's local zone, set with the new `TZ` environment variable in `docker-compose.yml` (UTC when unset). The first line after a start names the zone in use. Job times in the status table are unchanged: stored in UTC, shown in your browser's local time.
 
 ### Fixed

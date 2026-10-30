@@ -254,6 +254,7 @@ Library exports often hold the same book several times over: `Dune.epub`, `Dune.
 - On failure: the source is renamed to `<filename>.failed` and will not be retried automatically. Use the Retry button in the WebUI to re-queue it.
 - Raw image folders in `Comics_raw` are held until stable (no file changes for 30 s) before processing begins.
 - Every activity log line is stamped with the container's local time, set by the `TZ` environment variable (UTC when unset). The first log line after a start names the zone in effect.
+- Conversion log lines name the tool in brackets: `[kcc]`, `[gcc]`, `[kepubify]` or `[boko]`. The closing `SUCCESS` or `FAILED` line names the whole chain that ran, such as `[gcc+kepubify]`, and a failure names only the tools that had started, so `[gcc] FAILED` means kepubify never ran.
 - Live logs are shown in the WebUI and streamed to `docker logs`.
 - The WebUI has no authentication: keep port 5000 on your LAN or behind a VPN; don't forward it to the internet.
 

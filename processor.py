@@ -687,9 +687,19 @@ def _gcc_available() -> bool:
     return shutil.which('go-comic-converter') is not None
 
 
+def _tag(chain: list[str]) -> str:
+    """'[kcc] ' / '[gcc+kepubify] ' for the tools a job has run so far, or ''
+    before any tool started, so SUCCESS/FAILED lines name what produced them."""
+    return f"[{'+'.join(chain)}] " if chain else ''
+
+
 def _run_comic_engine(config: ConfigDict, src: str, temp_out: str,
-                      short: str, gcc_tmp: str, label: str | None = None) -> None:
+                      short: str, gcc_tmp: str, label: str | None = None,
+                      chain: list[str] | None = None) -> None:
     """Run the configured comic engine on src, leaving finished files in temp_out.
+
+    chain, when given, collects the tool tags as each starts so the caller's
+    final SUCCESS/FAILED line can name the whole pipeline.
 
     KCC writes its (already Kobo-marked) output straight into temp_out. gcc
     writes a plain EPUB, so kepubify runs over its directory afterwards; the
@@ -698,13 +708,15 @@ def _run_comic_engine(config: ConfigDict, src: str, temp_out: str,
     alongside a KCC job would exhaust memory on a small NAS just the same.
     """
     label = label or short
+    chain = chain if chain is not None else []
     if config.get('comic_engine') != 'gcc':
         cmd = _build_kcc_cmd(config, src, temp_out)
-        log(f">>> QUEUED: {label}")
+        log(f">>> [kcc] QUEUED: {label}")
         with kcc_semaphore:
-            log(f">>> STARTING: kcc-c2e on {label}")
-            log(f">>> CMD: {' '.join(cmd)}")
-            _run_conversion(cmd, short)
+            chain.append('kcc')
+            log(f">>> [kcc] STARTING: {label}")
+            log(f">>> [kcc] CMD: {' '.join(cmd)}")
+            _run_conversion(cmd, short, tool='kcc')
         return
 
     # Retry can land here on an image built without the binary.
@@ -713,28 +725,35 @@ def _run_comic_engine(config: ConfigDict, src: str, temp_out: str,
     os.makedirs(gcc_tmp, exist_ok=True)
     epub_dir = temp_out if config.get('kcc_nokepub') else gcc_tmp
     cmd = _build_gcc_cmd(config, src, epub_dir)
-    log(f">>> QUEUED: {label}")
+    log(f">>> [gcc] QUEUED: {label}")
     with kcc_semaphore:
-        log(f">>> STARTING: go-comic-converter on {label}")
-        log(f">>> CMD: {' '.join(cmd)}")
-        _run_conversion(cmd, short)
+        chain.append('gcc')
+        log(f">>> [gcc] STARTING: {label}")
+        log(f">>> [gcc] CMD: {' '.join(cmd)}")
+        _run_conversion(cmd, short, tool='gcc')
         if epub_dir is gcc_tmp:
             # --calibre gives .kepub directly, which is the comic output
             # extension move_output_file already normalises KCC down to.
             # A directory input makes one call cover every split part.
             cmd = ['kepubify', '--inplace', '--calibre', '--output', temp_out, gcc_tmp]
-            log(f">>> STARTING: kepubify on {label}")
-            log(f">>> CMD: {' '.join(cmd)}")
-            _run_conversion(cmd, short)
+            chain.append('kepubify')
+            log(f">>> [kepubify] STARTING: {label}")
+            log(f">>> [kepubify] CMD: {' '.join(cmd)}")
+            _run_conversion(cmd, short, tool='kepubify')
 
 
-def _run_conversion(cmd: list[str], short: str, timeout: int | None = None) -> None:
+def _run_conversion(cmd: list[str], short: str, timeout: int | None = None,
+                    tool: str = '') -> None:
     """Run cmd, streaming output to the log. Raises ConversionError on non-zero exit.
+
+    tool names the binary in the prefix of every streamed line, so output
+    from gcc and the kepubify pass that follows it can be told apart.
 
     timeout kills the process after that many seconds. A Timer rather than
     wait(timeout=): the stdout loop below blocks until the process closes its
     pipe, so a hung converter would never reach a timed wait.
     """
+    prefix = f'{tool} {short}' if tool else short
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
@@ -751,7 +770,7 @@ def _run_conversion(cmd: list[str], short: str, timeout: int | None = None) -> N
         timer.start()
     try:
         for line in process.stdout:
-            log(f"[{short}] {line.rstrip()}")
+            log(f"[{prefix}] {line.rstrip()}")
         process.wait()
     finally:
         if timer:
@@ -1064,6 +1083,7 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
     boko_tmp = os.path.join('/tmp', uuid.uuid4().hex + '_boko')
     gcc_tmp  = os.path.join('/tmp', uuid.uuid4().hex + '_gcc')
     lock_key = filepath
+    chain: list[str] = []   # tools run so far, for the closing log line
 
     try:
         # Register inside try so PROCESSING_LOCKS.discard always runs in finally.
@@ -1120,17 +1140,19 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
                 # has to survive into the intermediate file.
                 kepub_src = os.path.join(
                     boko_tmp, os.path.splitext(os.path.basename(filepath))[0] + '.epub')
-                log(f">>> STARTING: boko on {short}")
+                chain.append('boko')
+                log(f">>> [boko] STARTING: {short}")
                 cmd = _build_boko_cmd(filepath, kepub_src)
-                log(f">>> CMD: {' '.join(cmd)}")
-                _run_conversion(cmd, short, timeout=_boko_timeout())
-            log(f">>> STARTING: kepubify on {short}")
+                log(f">>> [boko] CMD: {' '.join(cmd)}")
+                _run_conversion(cmd, short, timeout=_boko_timeout(), tool='boko')
+            chain.append('kepubify')
+            log(f">>> [kepubify] STARTING: {short}")
             cmd = _build_kepubify_cmd(config, kepub_src, temp_out)
-            log(f">>> CMD: {' '.join(cmd)}")
-            _run_conversion(cmd, short)
+            log(f">>> [kepubify] CMD: {' '.join(cmd)}")
+            _run_conversion(cmd, short, tool='kepubify')
 
         else:
-            _run_comic_engine(config, filepath, temp_out, short, gcc_tmp)
+            _run_comic_engine(config, filepath, temp_out, short, gcc_tmp, chain=chain)
 
         produced = get_output_files(temp_out)
         if produced:
@@ -1162,12 +1184,12 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
                     prune_empty_dirs(filepath, in_base)
             count  = len(produced)
             suffix = 's' if count > 1 else ''
-            log(f">>> SUCCESS ({count} file{suffix}): {short}")
+            log(f">>> {_tag(chain)}SUCCESS ({count} file{suffix}): {short}")
             _update_job(job_id, state='success', finished=_now(), out_bytes=out_bytes)
             _bump_stats(converted=1, saved=src_bytes - out_bytes)
             _notify('success', os.path.basename(filepath))
         else:
-            log(f">>> FAILED (no output file found): {short}")
+            log(f">>> {_tag(chain)}FAILED (no output file found): {short}")
             failed_path = _rename_failed(filepath) if os.path.exists(filepath) else None
             _update_job(job_id, state='failed', finished=_now(),
                         error='no output produced', failed_path=failed_path)
@@ -1175,13 +1197,13 @@ def process_file(filepath: str, c_type: str, job_id: str | None = None) -> None:
 
     except ConversionError as e:
         msg = f'exit {e.returncode}'
-        log(f">>> FAILED ({msg}): {short}")
+        log(f">>> {_tag(chain)}FAILED ({msg}): {short}")
         failed_path = _rename_failed(filepath) if os.path.exists(filepath) else None
         _update_job(job_id, state='failed', finished=_now(), error=msg, failed_path=failed_path)
         _notify('failure', os.path.basename(filepath), msg)
     except Exception as e:
         msg = str(e)
-        log(f">>> ERROR: {short} — {msg}")
+        log(f">>> {_tag(chain)}ERROR: {short} — {msg}")
         failed_path = _rename_failed(filepath) if os.path.exists(filepath) else None
         _update_job(job_id, state='failed', finished=_now(), error=msg, failed_path=failed_path)
         _notify('failure', os.path.basename(filepath), msg)
@@ -1204,6 +1226,7 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
     temp_out   = os.path.join('/tmp', uuid.uuid4().hex + '_out')
     gcc_tmp    = os.path.join('/tmp', uuid.uuid4().hex + '_gcc')
     bundle_tmp = None
+    chain: list[str] = []
 
     try:
         if job_id is None:
@@ -1233,7 +1256,8 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
             bundle_tmp, kcc_input = _extract_chapter_folder(folderpath)
 
         os.makedirs(temp_out, exist_ok=True)
-        _run_comic_engine(config, kcc_input, temp_out, short, gcc_tmp, label=short + '/')
+        _run_comic_engine(config, kcc_input, temp_out, short, gcc_tmp,
+                          label=short + '/', chain=chain)
 
         rel_dir = os.path.relpath(os.path.dirname(folderpath), COMICS_IN)
         out_dir = COMICS_OUT if rel_dir in ('.', '') else os.path.join(COMICS_OUT, rel_dir)
@@ -1256,12 +1280,12 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
                     shutil.rmtree(folderpath)
             count  = len(produced)
             suffix = 's' if count > 1 else ''
-            log(f">>> SUCCESS ({count} file{suffix}): {short}/")
+            log(f">>> {_tag(chain)}SUCCESS ({count} file{suffix}): {short}/")
             _update_job(job_id, state='success', finished=_now(), out_bytes=out_bytes)
             _bump_stats(converted=1, saved=src_bytes - out_bytes)
             _notify('success', short + '/')
         else:
-            log(f">>> FAILED (no output file found): {short}/")
+            log(f">>> {_tag(chain)}FAILED (no output file found): {short}/")
             failed_path = _rename_failed(folderpath) if os.path.exists(folderpath) else None
             _update_job(job_id, state='failed', finished=_now(),
                         error='no output produced', failed_path=failed_path)
@@ -1269,13 +1293,13 @@ def process_folder(folderpath: str, job_id: str | None = None) -> None:
 
     except ConversionError as e:
         msg = f'exit {e.returncode}'
-        log(f">>> FAILED ({msg}): {short}/")
+        log(f">>> {_tag(chain)}FAILED ({msg}): {short}/")
         failed_path = _rename_failed(folderpath) if os.path.exists(folderpath) else None
         _update_job(job_id, state='failed', finished=_now(), error=msg, failed_path=failed_path)
         _notify('failure', short + '/', msg)
     except Exception as e:
         msg = str(e)
-        log(f">>> ERROR: {short}/ — {msg}")
+        log(f">>> {_tag(chain)}ERROR: {short}/ — {msg}")
         failed_path = _rename_failed(folderpath) if os.path.exists(folderpath) else None
         _update_job(job_id, state='failed', finished=_now(), error=msg, failed_path=failed_path)
         _notify('failure', short + '/', msg)

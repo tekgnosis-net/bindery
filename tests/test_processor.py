@@ -294,7 +294,7 @@ def test_process_file_book_honours_extension(tmp_path, extension,
     config = dict(DEFAULT_CONFIG)
     config['book_extension'] = extension
 
-    def fake_run(cmd, short):
+    def fake_run(cmd, short, **_):
         out = cmd[cmd.index('--output') + 1]
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, kepubify_writes), 'wb') as f:
@@ -323,7 +323,7 @@ def test_process_file_book_logs_cmd(tmp_path):
 
     config = dict(DEFAULT_CONFIG)
 
-    def fake_run(cmd, short):
+    def fake_run(cmd, short, **_):
         out = cmd[cmd.index('--output') + 1]
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, 'Book.kepub'), 'wb') as f:
@@ -340,7 +340,7 @@ def test_process_file_book_logs_cmd(tmp_path):
          patch('processor.log', side_effect=logged.append):
         processor.process_file(str(src), 'book')
 
-    cmd_lines = [line for line in logged if line.startswith('>>> CMD:')]
+    cmd_lines = [line for line in logged if line.startswith('>>> [kepubify] CMD:')]
     assert len(cmd_lines) == 1
     assert 'kepubify' in cmd_lines[0]
 
@@ -356,7 +356,7 @@ def test_process_file_comic_still_produces_kepub(tmp_path):
     config = dict(DEFAULT_CONFIG)
     config['book_extension'] = 'epub'   # must be ignored for comics
 
-    def fake_run(cmd, short):
+    def fake_run(cmd, short, **_):
         out = cmd[cmd.index('--output') + 1]
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, 'Comic.kepub.epub'), 'wb') as f:
@@ -1191,7 +1191,7 @@ def test_process_file_kindle_book_chains_boko_into_kepubify(tmp_path):
 
     calls = []
 
-    def fake_run(cmd, short, timeout=None):
+    def fake_run(cmd, short, timeout=None, **_):
         calls.append((list(cmd), timeout))
         if cmd[0] == 'boko':
             with open(cmd[3], 'wb') as f:
@@ -1228,7 +1228,7 @@ def test_process_file_kindle_book_boko_failure_renames_failed(tmp_path):
 
     calls = []
 
-    def fake_run(cmd, short, timeout=None):
+    def fake_run(cmd, short, **_):
         calls.append(cmd[0])
         raise processor.ConversionError(1)
 
@@ -1249,7 +1249,7 @@ def test_process_file_kindle_book_without_boko_fails_cleanly(tmp_path):
     config = dict(DEFAULT_CONFIG)
     config['book_boko_enabled'] = True
 
-    def fake_run(cmd, short, timeout=None):
+    def fake_run(cmd, short, **_):
         raise AssertionError('no converter should run')
 
     with _boko_env(tmp_path, config, fake_run, available=False):
@@ -1427,7 +1427,7 @@ def _prio_run(tmp_path, config, fail_on=None):
     """fake _run_conversion: boko writes an EPUB, kepubify writes <stem>.kepub."""
     calls = []
 
-    def fake_run(cmd, short, timeout=None):
+    def fake_run(cmd, short, **_):
         calls.append(cmd[0])
         if fail_on and fail_on in cmd[-1]:
             raise processor.ConversionError(1)
@@ -1598,7 +1598,7 @@ def test_build_gcc_cmd_metadatatitle_off_omits_title(tmp_path):
 def _fake_gcc_then_kepubify(calls, parts=('Comic.epub',)):
     """Stand in for both binaries: gcc writes EPUBs into its -output dir and
     kepubify turns everything in its input dir into .kepub in --output."""
-    def fake_run(cmd, short, timeout=None):
+    def fake_run(cmd, short, **_):
         calls.append(cmd)
         if cmd[0] == 'go-comic-converter':
             out = cmd[cmd.index('-output') + 1]
@@ -1710,7 +1710,7 @@ def test_process_file_kcc_engine_unchanged(tmp_path):
     src.write_bytes(b'x' * 100)
     calls = []
 
-    def fake_run(cmd, short, timeout=None):
+    def fake_run(cmd, short, **_):
         calls.append(cmd)
         out = cmd[cmd.index('--output') + 1]
         os.makedirs(out, exist_ok=True)
@@ -1799,3 +1799,72 @@ def test_log_timezone_line_names_zone(tmp_path):
         processor.LOG_BUFFER.clear()
         processor._log_timezone()
     assert 'Timezone: Australia/Sydney' in processor.LOG_BUFFER[-1]
+
+
+# ── Tool tags in the log ──────────────────────────────────────────────────────
+
+def test_log_lines_tag_gcc_and_kepubify_chain(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    logged = []
+
+    with patch('processor._run_conversion', side_effect=_fake_gcc_then_kepubify([])), \
+         patch('processor.log', side_effect=logged.append):
+        with _nest(_comic_patches(tmp_path, _gcc_config())):
+            processor.process_file(str(src), 'comic')
+
+    assert '>>> [gcc] QUEUED: Comic.cbz' in logged
+    assert '>>> [gcc] STARTING: Comic.cbz' in logged
+    assert '>>> [kepubify] STARTING: Comic.cbz' in logged
+    assert any(l.startswith('>>> [gcc] CMD: go-comic-converter') for l in logged)
+    assert any(l.startswith('>>> [kepubify] CMD: kepubify') for l in logged)
+    assert '>>> [gcc+kepubify] SUCCESS (1 file): Comic.cbz' in logged
+
+
+def test_log_lines_tag_kcc_alone(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    logged = []
+
+    def fake_run(cmd, short, **_):
+        out = cmd[cmd.index('--output') + 1]
+        os.makedirs(out, exist_ok=True)
+        open(os.path.join(out, 'Comic.kepub.epub'), 'wb').write(b'k')
+
+    with patch('processor._run_conversion', side_effect=fake_run), \
+         patch('processor.log', side_effect=logged.append):
+        with _nest(_comic_patches(tmp_path, dict(DEFAULT_CONFIG))):
+            processor.process_file(str(src), 'comic')
+
+    assert '>>> [kcc] STARTING: Comic.cbz' in logged
+    assert '>>> [kcc] SUCCESS (1 file): Comic.cbz' in logged
+
+
+def test_log_failed_line_names_the_tool_that_failed(tmp_path):
+    comics_in = tmp_path / 'comics_in'
+    comics_in.mkdir()
+    src = comics_in / 'Comic.cbz'
+    src.write_bytes(b'x' * 100)
+    logged = []
+
+    def fake_run(cmd, short, **_):
+        raise processor.ConversionError(2)
+
+    with patch('processor._run_conversion', side_effect=fake_run), \
+         patch('processor.log', side_effect=logged.append):
+        with _nest(_comic_patches(tmp_path, _gcc_config())):
+            processor.process_file(str(src), 'comic')
+
+    # gcc raised before kepubify ever started, so only gcc is named.
+    assert '>>> [gcc] FAILED (exit 2): Comic.cbz' in logged
+
+
+def test_run_conversion_prefixes_output_with_tool(tmp_path):
+    logged = []
+    with patch('processor.log', side_effect=logged.append):
+        processor._run_conversion(['sh', '-c', 'echo hello'], 'Comic.cbz', tool='gcc')
+    assert '[gcc Comic.cbz] hello' in logged
